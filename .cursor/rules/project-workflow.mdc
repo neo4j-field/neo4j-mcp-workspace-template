@@ -1,0 +1,78 @@
+---
+description: This rule defines the end to end workflow from analyzing source data to validating a final graph in Neo4j. It should be used to understand the steps necessary to complete each task in this process.
+alwaysApply: false
+---
+
+## 1. Run discovery on sample of source data 
+* Read samples of source data provided by the user. These may be tables or unstructured data from PDFs or websites.
+* Analyze the source data by writing your own analysis scripts. use the Python REPL and Pandas if these tools are available.
+* Assess whether the use cases provided by the user apply to the source data. Use cases should always be provided, unless the user is only interested in simply exploring graph.
+
+## 2. Generate, Validate, Visualize first graph data model
+* Based on your findings, generate a first pass of the graph data model
+
+### Graph Data Modeling Process
+Primary Instructions:
+* Ensure that if you know the source information for Properties, you include it in the data model.
+* If you deviate from the user's requests, you must clearly explain why you did so.
+* Only use data from the provided sample data to create the data model (Unless explicitly stated otherwise).
+* If the user requests use cases that are outside the scope of the provided sample data, you should explain why you cannot create a data model for those use cases.
+
+Process:
+1. Analysis
+    1a. Analyze the sample data 
+    1b. Use the `list_example_data_models` tool to check if there are any relevant examples that you can use to guide your data model
+    1c. Use the `get_example_data_model` tool to get any relevant example data models
+2. Generation
+    2a. Generate a new data model based on your analysis, the provided context and any examples
+    2b. Use the `get_mermaid_config_str` tool to validate the data model and get a Mermaid visualization configuration
+    2c. If necessary, correct any validation errors and repeat step 2b
+3. Final Response
+    3a. Show the user the visualization with Mermaid, if possible 
+    3b. Explain the data model and any gaps between the requested use cases
+    3c. Request feedback from the user (remember that data modeling is an iterative process)
+
+## 3. Refine data model with user feedback
+* Prompt the user to provide any feedback on the graph data model
+* Make any necessary changes and repeat step 2
+* If no changes are necessary, then continue to step 4
+
+## 4. Ingest source data according to finalized data model
+### TODO
+
+## 5. Generate Cypher according to use cases defined during discovery
+* Each use case should have one or more Cypher queries attached to it that provide the appropriate context
+* These Cypher queries should be persisted in a yaml file that follows this format
+
+### YAML Format
+```yaml
+analytical_queries:
+    use_case_key:
+        name:
+        cyphers:
+```
+
+### Example Analytical Cypher YAML
+```yaml
+analytical_queries:
+  apple_count:
+    name: How many apples are in the basket?
+    cyphers:
+      - MATCH (a:Apple)-[:IN_BASKET]->(b:Basket {id: $basketId}) RETURN COUNT(*)
+  
+  apple_and_basket_counts:
+    name: How many apples are there and how many baskets are there?
+    cyphers:
+      - |
+        MATCH (a:Apple) 
+        WITH DISTINCT a
+        RETURN COUNT(*) as apple_count
+      - |
+        MATCH (b:Basket) 
+        WITH DISTINCT b
+        RETURN COUNT(*) as basket_count
+```
+
+## 6. Validate that graph adequately addresses the use cases 
+* Use the Cypher MCP Server to execute the analytical Cypher queries against the Neo4j database
+* Analyze the results and ensure that they are addressing the original use cases
