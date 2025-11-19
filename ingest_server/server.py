@@ -48,9 +48,6 @@ async def setup():
                                  )
     ingest_mcp.add_tool(ingest_tool)
 
-    schema_tool = await cypher_mcp.get_tool("get_neo4j_schema")
-    ingest_mcp.add_tool(schema_tool)
-
 if __name__ == "__main__":
     asyncio.run(setup())
     ingest_mcp.run(transport="stdio")
