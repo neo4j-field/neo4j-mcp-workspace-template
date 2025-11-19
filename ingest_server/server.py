@@ -1,0 +1,57 @@
+import os
+import asyncio
+from fastmcp import FastMCP
+
+from mcp_neo4j_cypher.server import create_mcp_server  
+from neo4j import AsyncGraphDatabase
+from fastmcp.tools.tool import ToolResult
+from fastmcp.tools import Tool
+from fastmcp.tools.tool_transform import forward
+from fastmcp.tools.tool_transform import ArgTransform
+
+
+import pandas as pd
+from dotenv import load_dotenv
+load_dotenv()
+
+driver = AsyncGraphDatabase.driver(os.getenv("NEO4J_URI"), auth=(os.getenv("NEO4J_USERNAME"), os.getenv("NEO4J_PASSWORD")))
+
+cypher_mcp = create_mcp_server(driver)
+
+ingest_mcp = FastMCP(name="ingest_mcp")
+
+
+async def ingest_csv_into_neo4j(query: str, params: dict[str, str]) -> list[ToolResult]:
+    """
+    Ingest a CSV file into Neo4j according to a given Cypher query.
+    """
+
+    csv_path = params.get("csv_path")
+
+    assert csv_path is not None, "csv_path is required `params` field."
+
+    # prepare records to be passed as parameters
+    records = pd.read_csv(csv_path).to_dict(orient="records")
+
+    # call the parent `write_neo4j_cypher` tool
+    return await forward(query=query, params={"records": records})
+
+async def setup():
+    """Prepare the Ingest MCP Server"""
+    # await ingest_mcp.import_server(cypher_mcp)
+    write_tool = await cypher_mcp.get_tool("write_neo4j_cypher")
+    ingest_tool = Tool.from_tool(write_tool,
+                                 transform_fn=ingest_csv_into_neo4j,
+                                 transform_args={
+                                     "query": ArgTransform(description="The ingest Cypher query to execute"),
+                                     "params": ArgTransform(description="The parameter dictionary. This should contain a single key 'csv_path' with the path to the local CSV file to ingest."),
+                                 }
+                                 )
+    ingest_mcp.add_tool(ingest_tool)
+
+    schema_tool = await cypher_mcp.get_tool("get_neo4j_schema")
+    ingest_mcp.add_tool(schema_tool)
+
+if __name__ == "__main__":
+    asyncio.run(setup())
+    ingest_mcp.run(transport="stdio")

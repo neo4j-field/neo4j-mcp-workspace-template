@@ -5,6 +5,7 @@ alwaysApply: false
 
 ## 1. Run discovery on sample of source data 
 * Read samples of source data provided by the user. These may be tables or unstructured data from PDFs or websites.
+* Sample data should be persisted as CSV data in this project to be ingested at a later stage.
 * Analyze the source data by writing your own analysis scripts. use the Python REPL and Pandas if these tools are available.
 * Assess whether the use cases provided by the user apply to the source data. Use cases should always be provided, unless the user is only interested in simply exploring graph.
 
