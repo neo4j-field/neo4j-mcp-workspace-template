@@ -11,8 +11,6 @@ from fastmcp.tools.tool_transform import ArgTransform
 
 
 import pandas as pd
-from dotenv import load_dotenv
-load_dotenv()
 
 driver = AsyncGraphDatabase.driver(os.getenv("NEO4J_URI"), auth=(os.getenv("NEO4J_USERNAME"), os.getenv("NEO4J_PASSWORD")))
 
