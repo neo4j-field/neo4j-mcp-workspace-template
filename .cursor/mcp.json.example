@@ -1,12 +1,12 @@
 {
     "mcpServers": {
-      "graph-data-modeling": {
+      "neo4j-data-modeling": {
         "command": "uvx",
-        "args": [ "mcp-neo4j-data-modeling@0.7.0", "--transport", "stdio" ]
+        "args": [ "mcp-neo4j-data-modeling@0.8.0", "--transport", "stdio" ]
     },
     "neo4j-cypher": {
         "command": "uvx",
-        "args": [ "mcp-neo4j-cypher@0.5.1", "--transport", "stdio", "--read-only" ],
+        "args": [ "mcp-neo4j-cypher@0.5.2" ],
         "env": {
             "NEO4J_URI": "neo4j://localhost:7687",
             "NEO4J_USERNAME": "neo4j",
@@ -61,7 +61,7 @@
             "NEO4J_USERNAME": "neo4j",
             "NEO4J_PASSWORD": "password",
             "NEO4J_DATABASE": "neo4j",
-            "EXTRACTION_MODEL": "gpt-4o-mini",
+            "EXTRACTION_MODEL": "gpt-5-mini",
             "OPENAI_API_KEY": "sk-..."
         }
     }
