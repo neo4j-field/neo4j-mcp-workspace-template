@@ -26,24 +26,23 @@ This server provides tools to:
 ## Tools
 
 ### 1. `process_pdf_to_chunks`
-Extract text from a PDF and split into overlapping chunks.
+Extract text from a PDF and split into overlapping chunks. Saves chunks to a JSON file.
 
 **Parameters:**
 - `pdf_path`: Path to the PDF file
 - `document_id`: Unique identifier for the document
+- `output_dir`: Directory to save the chunks JSON file
 - `chunk_size`: Target chunk size in tokens (default: 500)
 - `chunk_overlap`: Overlap between chunks (default: 50)
 
-**Returns:** JSON with chunks and metadata
+**Returns:** JSON with file path and summary (not the full chunks)
 
 ### 2. `create_lexical_graph`
-Create Document and Chunk nodes in Neo4j.
+Create Document and Chunk nodes in Neo4j from a chunks JSON file.
 
 **Parameters:**
-- `document_id`: Unique document identifier
+- `chunks_file`: Path to the chunks JSON file from `process_pdf_to_chunks`
 - `document_name`: Human-readable name
-- `source_path`: Source path/URL
-- `chunks_json`: JSON from `process_pdf_to_chunks`
 
 **Creates:**
 - Document node
@@ -58,7 +57,7 @@ Add embeddings to Chunk nodes.
 **Parameters:**
 - `document_id`: (Optional) Embed only this document's chunks
 - `parallel`: Concurrent embedding batches (default: 10)
-- `model`: Embedding model via LiteLLM (default: text-embedding-3-small)
+- `model`: Embedding model (default: text-embedding-3-small)
 
 ## Installation
 
@@ -98,18 +97,18 @@ Add to your `mcp.json`:
 ## Usage Example
 
 ```python
-# 1. Process PDF to chunks
-chunks_json = process_pdf_to_chunks(
+# 1. Process PDF to chunks (saved to file)
+result = process_pdf_to_chunks(
     pdf_path="/path/to/document.pdf",
-    document_id="doc_001"
-)
-
-# 2. Create lexical graph (no embeddings yet)
-create_lexical_graph(
     document_id="doc_001",
-    document_name="My Document",
-    source_path="/path/to/document.pdf",
-    chunks_json=chunks_json
+    output_dir="/path/to/output"
+)
+# Returns: {"chunks_file": "/path/to/output/doc_001_chunks.json", ...}
+
+# 2. Create lexical graph from chunks file
+create_lexical_graph(
+    chunks_file="/path/to/output/doc_001_chunks.json",
+    document_name="My Document"
 )
 
 # 3. Add embeddings
@@ -131,5 +130,4 @@ RETURN node.text, score
 - Neo4j 5.11+ (for vector indexes)
 - Neo4j 5.13+ (for `db.create.setNodeVectorProperty`)
 - Python 3.10+
-- OpenAI API key (or other LiteLLM-compatible provider)
-
+- OpenAI API key (for embeddings)
