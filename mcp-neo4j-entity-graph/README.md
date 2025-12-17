@@ -21,7 +21,6 @@ MCP server for extracting entities from graph nodes and creating entity graphs i
 Extracts entities from source nodes and creates entity graph directly in Neo4j.
 
 **Parameters:**
-- `document_id`: Document ID to extract entities from
 - `schema_json`: Path to JSON schema file or inline JSON string
 - `source_label`: Label of source nodes (default: "Chunk")
 - `source_text_property`: Property containing text (default: "text")
@@ -30,10 +29,22 @@ Extracts entities from source nodes and creates entity graph directly in Neo4j.
 - `model`: LLM model to use (default: from EXTRACTION_MODEL env)
 
 **Workflow:**
-1. Queries: `MATCH (n:{source_label}) WHERE NOT (n)<-[:EXTRACTED_FROM]-()`
-2. LLM extracts entities using structured output (per chunk)
-3. Creates entity nodes + EXTRACTED_FROM relationships immediately after each chunk
+1. Queries all nodes with the specified label: `MATCH (n:{source_label}) WHERE NOT (n)<-[:EXTRACTED_FROM]-()`
+2. LLM extracts entities using structured output (per node)
+3. Creates entity nodes + EXTRACTED_FROM relationships immediately after each node
 4. Creates relationships between entities
+
+**Examples:**
+```python
+# Extract from Chunk nodes (default)
+extract_entities_from_graph(schema_json="/path/to/schema.json")
+
+# Extract from Page nodes
+extract_entities_from_graph(schema_json="/path/to/schema.json", source_label="Page")
+
+# Force re-extraction of all nodes
+extract_entities_from_graph(schema_json="/path/to/schema.json", force=True)
+```
 
 ### `convert_schema`
 
@@ -113,10 +124,16 @@ convert_schema(
 )
 # Creates: schema.json + schema.py (Pydantic model)
 
-# 2. Extract entities from chunks
+# 2. Extract entities from all Chunk nodes
 extract_entities_from_graph(
-    document_id="doc_001",
     schema_json="/path/to/schema.json",
     parallel=5
+)
+
+# Or extract from a different node type
+extract_entities_from_graph(
+    schema_json="/path/to/schema.json",
+    source_label="Page",
+    source_text_property="content"
 )
 ```

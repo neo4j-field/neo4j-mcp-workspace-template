@@ -168,8 +168,7 @@ def create_mcp_server(
         ),
     )
     async def extract_entities_from_graph(
-        document_id: str = Field(..., description="Document ID to extract entities from"),
-        schema_json: str = Field(..., description="JSON string with extraction schema (entity_types, relationship_types)"),
+        schema_json: str = Field(..., description="JSON string with extraction schema (entity_types, relationship_types), or path to schema file"),
         source_label: str = Field(default="Chunk", description="Label of source nodes to extract from"),
         source_text_property: str = Field(default="text", description="Property containing text to extract from"),
         force: bool = Field(default=False, description="If true, extract from all nodes. If false, only from nodes without prior extraction."),
@@ -177,15 +176,13 @@ def create_mcp_server(
         model: Optional[str] = Field(default=None, description="LLM model to use (defaults to EXTRACTION_MODEL env var)")
     ) -> str:
         """
-        Extract entities and relationships from document chunks using LLM.
+        Extract entities and relationships from graph nodes using LLM.
         
         This tool:
-        1. Queries source nodes from Neo4j (filtered by prior extraction unless force=true)
+        1. Queries all nodes with the specified label (filtered by prior extraction unless force=true)
         2. Extracts entities/relationships using LLM with structured output
         3. Creates entity nodes directly in Neo4j
         4. Creates EXTRACTED_FROM relationships to source nodes for provenance
-        
-        **Note:** Embeddings are added separately with embed_chunks tool.
         
         **Returns:** Summary of extracted entities and relationships
         """
@@ -195,7 +192,6 @@ def create_mcp_server(
         
         logger.info(
             "Starting entity extraction from graph",
-            document_id=document_id,
             source_label=source_label,
             force=force,
             model=actual_model
@@ -213,24 +209,24 @@ def create_mcp_server(
             
             schema = ExtractionSchema.model_validate(schema_data)
             
-            # Build query to get source nodes
+            # Build query to get source nodes (simple: just match by label)
             if force:
                 query = f"""
-                    MATCH (n:{source_label})-[:PART_OF]->(d:Document {{id: $documentId}})
+                    MATCH (n:{source_label})
+                    WHERE n.{source_text_property} IS NOT NULL
                     RETURN n.id as id, n.{source_text_property} as text
-                    ORDER BY n.index
                 """
             else:
                 query = f"""
-                    MATCH (n:{source_label})-[:PART_OF]->(d:Document {{id: $documentId}})
-                    WHERE NOT (n)<-[:EXTRACTED_FROM]-()
+                    MATCH (n:{source_label})
+                    WHERE n.{source_text_property} IS NOT NULL
+                      AND NOT (n)<-[:EXTRACTED_FROM]-()
                     RETURN n.id as id, n.{source_text_property} as text
-                    ORDER BY n.index
                 """
             
             # Get source nodes from Neo4j
             async with neo4j_driver.session(database=database) as session:
-                result = await session.run(query, documentId=document_id)
+                result = await session.run(query)
                 records = await result.data()
             
             if not records:
@@ -315,7 +311,6 @@ def create_mcp_server(
             
             summary = {
                 "status": "success",
-                "document_id": document_id,
                 "model": actual_model,
                 "source_label": source_label,
                 "nodes_processed": total_chunks,
