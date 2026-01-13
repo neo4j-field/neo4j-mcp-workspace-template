@@ -1,17 +1,22 @@
 """MCP server for creating lexical graphs from PDF documents.
 
 Tools:
-- process_pdf_to_chunks: Extract text from PDF and create chunks
-- create_lexical_graph: Create Document and Chunk nodes in Neo4j
+- process_pdf_to_chunks: Extract text from PDF and create chunks (single file)
+- create_lexical_graph: Create Document and Chunk nodes in Neo4j (single file)
+- create_lexical_graph_from_folder: Batch process folder of PDFs into Neo4j
 - embed_chunks: Add embeddings to existing Chunk nodes
 """
 
 import asyncio
+import csv
+import hashlib
 import json
 import logging
 import os
 import sys
-from typing import Any, Literal, Optional
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional
 
 import structlog
 from fastmcp import FastMCP
@@ -245,9 +250,8 @@ def create_mcp_server(
         - (Chunk)-[:PART_OF]->(Document) relationships
         - (Chunk)-[:NEXT]->(Chunk) relationships for sequence
         - Constraints on Document.id and Chunk.id
-        - Vector index for future embeddings
         
-        **Note:** Embeddings are added separately with embed_chunks tool.
+        **Note:** Embeddings and vector index are added separately with embed_chunks tool.
         
         **Returns:** Summary of created nodes and relationships
         """
@@ -338,19 +342,6 @@ def create_mcp_server(
                 record = await result.single()
                 next_rels = record["relationships"] if record else 0
             
-            # Create vector index (will be used after embedding)
-            # Default to 1536 dimensions for text-embedding-3-small
-            try:
-                async with neo4j_driver.session(database=database) as session:
-                    await session.run(
-                        QUERIES["create_vector_index"],
-                        dimensions=1536
-                    )
-                    logger.debug("Vector index created/verified")
-            except Exception as e:
-                # Index might already exist with different config
-                logger.warning(f"Vector index creation note: {e}")
-            
             summary = {
                 "status": "success",
                 "document_id": document_id,
@@ -396,7 +387,8 @@ def create_mcp_server(
         model: str = Field(default=embedding_model, description="Embedding model to use (via LiteLLM)"),
         node_label: str = Field(default="Chunk", description="Label of nodes to embed (e.g., 'Chunk', 'Page')"),
         id_property: Optional[str] = Field(default=None, description="Property name for node ID (e.g., 'id', 'chunk_id'). If not provided, uses elementId() for universal compatibility."),
-        text_property: str = Field(default="text", description="Property name for text content to embed")
+        text_property: str = Field(default="text", description="Property name for text content to embed"),
+        create_fulltext_index: bool = Field(default=True, description="Create a fulltext index on the text property for keyword search")
     ) -> str:
         """
         Add embeddings to nodes in Neo4j.
@@ -411,6 +403,8 @@ def create_mcp_server(
         If document_id is provided, only embeds chunks for that document.
         Otherwise, embeds all matching nodes without embeddings.
         
+        Optionally creates a fulltext index on the text property for keyword search.
+        
         **Progress:** Reports progress during embedding generation.
         
         **Returns:** Summary of embedded nodes
@@ -419,6 +413,9 @@ def create_mcp_server(
         use_element_id = id_property is None
         id_select = "elementId(c)" if use_element_id else f"c.{id_property}"
         
+        # Embedding property name follows pattern: {text_property}_embedding
+        embedding_property = f"{text_property}_embedding"
+        
         logger.info(
             "Starting chunk embedding",
             document_id=document_id,
@@ -426,7 +423,8 @@ def create_mcp_server(
             parallel=parallel,
             node_label=node_label,
             id_property=id_property or "elementId()",
-            text_property=text_property
+            text_property=text_property,
+            embedding_property=embedding_property
         )
         
         try:
@@ -434,14 +432,14 @@ def create_mcp_server(
             if document_id:
                 query = f"""
                     MATCH (c:{node_label})-[:PART_OF]->(d:Document {{id: $documentId}})
-                    WHERE c.embedding IS NULL AND c.{text_property} IS NOT NULL
+                    WHERE c.{embedding_property} IS NULL AND c.{text_property} IS NOT NULL
                     RETURN {id_select} as id, c.{text_property} as text
                     ORDER BY c.index
                 """
             else:
                 query = f"""
                     MATCH (c:{node_label})
-                    WHERE c.embedding IS NULL AND c.{text_property} IS NOT NULL
+                    WHERE c.{embedding_property} IS NULL AND c.{text_property} IS NOT NULL
                     RETURN {id_select} as id, c.{text_property} as text
                 """
             
@@ -505,14 +503,14 @@ def create_mcp_server(
                 update_query = f"""
                     UNWIND $embeddings AS item
                     MATCH (c:{node_label}) WHERE elementId(c) = item.id
-                    CALL db.create.setNodeVectorProperty(c, 'embedding', item.embedding)
+                    CALL db.create.setNodeVectorProperty(c, '{embedding_property}', item.embedding)
                     RETURN count(c) as updated
                 """
             else:
                 update_query = f"""
                     UNWIND $embeddings AS item
                     MATCH (c:{node_label} {{{id_property}: item.id}})
-                    CALL db.create.setNodeVectorProperty(c, 'embedding', item.embedding)
+                    CALL db.create.setNodeVectorProperty(c, '{embedding_property}', item.embedding)
                     RETURN count(c) as updated
                 """
             
@@ -529,15 +527,57 @@ def create_mcp_server(
                 
                 logger.debug(f"Updated embedding batch {i // batch_size + 1}")
             
+            # Create vector index if embeddings were added
+            # Get dimensions from first embedding
+            vector_index_created = False
+            fulltext_index_created = False
+            
+            if embeddings_data:
+                dimensions = len(embeddings_data[0]["embedding"])
+                vector_index_name = f"{node_label.lower()}_{text_property}_embedding"
+                try:
+                    index_query = f"""
+                        CREATE VECTOR INDEX {vector_index_name} IF NOT EXISTS
+                        FOR (c:{node_label}) ON (c.{embedding_property})
+                        OPTIONS {{indexConfig: {{
+                            `vector.dimensions`: $dimensions,
+                            `vector.similarity_function`: 'cosine'
+                        }}}}
+                    """
+                    async with neo4j_driver.session(database=database) as session:
+                        await session.run(index_query, dimensions=dimensions)
+                    vector_index_created = True
+                    logger.info(f"Vector index '{vector_index_name}' created on {node_label}.{embedding_property} with {dimensions} dimensions")
+                except Exception as e:
+                    # Index might already exist with different config
+                    logger.warning(f"Vector index note: {e}")
+            
+            # Create fulltext index if requested
+            if create_fulltext_index:
+                try:
+                    fulltext_query = f"""
+                        CREATE FULLTEXT INDEX {node_label.lower()}_{text_property}_fulltext IF NOT EXISTS
+                        FOR (c:{node_label}) ON EACH [c.{text_property}]
+                    """
+                    async with neo4j_driver.session(database=database) as session:
+                        await session.run(fulltext_query)
+                    fulltext_index_created = True
+                    logger.info(f"Fulltext index created for {node_label}.{text_property}")
+                except Exception as e:
+                    logger.warning(f"Fulltext index note: {e}")
+            
             summary = {
                 "status": "success",
                 "document_id": document_id,
                 "node_label": node_label,
                 "id_property": id_property,
                 "text_property": text_property,
+                "embedding_property": embedding_property,
                 "model": model,
                 "nodes_processed": total_chunks,
                 "nodes_embedded": total_updated,
+                "vector_index_created": vector_index_created,
+                "fulltext_index_created": fulltext_index_created,
                 "message": f"Successfully embedded {total_updated} {node_label} nodes"
             }
             
@@ -548,6 +588,327 @@ def create_mcp_server(
         except Exception as e:
             logger.error("Failed to embed chunks", error=str(e))
             raise ToolError(f"Failed to embed chunks: {e}")
+    
+    # ========================================
+    # TOOL 4: Create Lexical Graph from Folder
+    # ========================================
+    
+    @mcp.tool(
+        name="create_lexical_graph_from_folder",
+        annotations=ToolAnnotations(
+            title="Create Lexical Graph from Folder",
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+    )
+    async def create_lexical_graph_from_folder(
+        folder_path: str = Field(..., description="Path to folder containing PDF files"),
+        output_dir: str = Field(..., description="Directory to save manifest and optionally chunk files"),
+        metadata_csv: Optional[str] = Field(None, description="Optional: Path to CSV with document metadata"),
+        filename_column: str = Field(default="filename", description="Column name in CSV for filename"),
+        id_strategy: str = Field(default="filename", description="How to generate document IDs: 'filename', 'csv_column', or 'hash'"),
+        id_column: Optional[str] = Field(None, description="If id_strategy='csv_column', which column to use for document ID"),
+        chunk_size: int = Field(default=default_chunk_size, description="Target chunk size in tokens"),
+        chunk_overlap: int = Field(default=default_chunk_overlap, description="Overlap between chunks in tokens"),
+        parallel: int = Field(default=5, description="Number of PDFs to process in parallel"),
+        skip_existing: bool = Field(default=False, description="Skip documents that already exist in DB instead of erroring"),
+        save_chunks_to_disk: bool = Field(default=False, description="Save chunk JSON files to disk for debugging"),
+    ) -> str:
+        """
+        Process a folder of PDFs and create lexical graph in Neo4j.
+        
+        This tool:
+        - Scans folder for PDF files
+        - Optionally reads metadata from CSV
+        - Processes PDFs in parallel
+        - Creates Document and Chunk nodes in Neo4j
+        - Returns summary with path to detailed manifest
+        
+        **ID Strategy:**
+        - 'filename': Use PDF filename (without extension) as document ID
+        - 'csv_column': Use a column from metadata CSV as document ID
+        - 'hash': Generate SHA256 hash from file content
+        
+        **Metadata CSV:** If provided, columns become Document node properties.
+        PDFs not in CSV are processed with a warning. CSV entries without matching PDF are skipped with warning.
+        
+        **Returns:** JSON summary with path to manifest file containing details
+        """
+        logger.info(
+            "Creating lexical graph from folder",
+            folder_path=folder_path,
+            metadata_csv=metadata_csv,
+            id_strategy=id_strategy,
+            parallel=parallel
+        )
+        
+        folder = Path(folder_path)
+        output = Path(output_dir)
+        output.mkdir(parents=True, exist_ok=True)
+        
+        if not folder.exists() or not folder.is_dir():
+            raise ToolError(f"Folder not found: {folder_path}")
+        
+        # Find all PDF files
+        pdf_files = list(folder.glob("*.pdf")) + list(folder.glob("*.PDF"))
+        if not pdf_files:
+            raise ToolError(f"No PDF files found in {folder_path}")
+        
+        logger.info(f"Found {len(pdf_files)} PDF files")
+        
+        # Load metadata CSV if provided
+        metadata: Dict[str, Dict[str, Any]] = {}
+        csv_files_not_found: List[str] = []
+        
+        if metadata_csv:
+            csv_path = Path(metadata_csv)
+            if not csv_path.exists():
+                raise ToolError(f"Metadata CSV not found: {metadata_csv}")
+            
+            with open(csv_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                if filename_column not in reader.fieldnames:
+                    raise ToolError(f"Column '{filename_column}' not found in CSV. Available: {reader.fieldnames}")
+                
+                for row in reader:
+                    filename = row[filename_column]
+                    metadata[filename] = {k: v for k, v in row.items() if k != filename_column}
+            
+            logger.info(f"Loaded metadata for {len(metadata)} files from CSV")
+            
+            # Check for CSV entries without matching PDFs
+            pdf_names = {p.name for p in pdf_files}
+            for csv_filename in metadata.keys():
+                if csv_filename not in pdf_names:
+                    csv_files_not_found.append(csv_filename)
+        
+        # Create constraints (idempotent)
+        async with neo4j_driver.session(database=database) as session:
+            await session.run(QUERIES["create_document_constraint"])
+            await session.run(QUERIES["create_chunk_constraint"])
+        
+        # Check which documents already exist
+        existing_doc_ids = set()
+        async with neo4j_driver.session(database=database) as session:
+            result = await session.run("MATCH (d:Document) RETURN d.id as id")
+            records = await result.data()
+            existing_doc_ids = {r["id"] for r in records}
+        
+        # Prepare processing tasks
+        results: List[Dict[str, Any]] = []
+        warnings: List[str] = []
+        pdfs_not_in_csv: List[str] = []
+        
+        # Add warnings for CSV files not found
+        for csv_file in csv_files_not_found:
+            warnings.append(f"CSV entry '{csv_file}' has no matching PDF in folder - skipped")
+        
+        # Helper to generate document ID
+        def get_document_id(pdf_path: Path) -> str:
+            if id_strategy == "filename":
+                return pdf_path.stem
+            elif id_strategy == "hash":
+                with open(pdf_path, 'rb') as f:
+                    return hashlib.sha256(f.read()).hexdigest()[:16]
+            elif id_strategy == "csv_column":
+                if not id_column:
+                    raise ToolError("id_column required when id_strategy='csv_column'")
+                file_meta = metadata.get(pdf_path.name, {})
+                if id_column not in file_meta:
+                    raise ToolError(f"Column '{id_column}' not found in metadata for {pdf_path.name}")
+                return str(file_meta[id_column])
+            else:
+                raise ToolError(f"Unknown id_strategy: {id_strategy}")
+        
+        # Helper to process a single PDF
+        async def process_single_pdf(pdf_path: Path) -> Dict[str, Any]:
+            doc_id = get_document_id(pdf_path)
+            file_metadata = metadata.get(pdf_path.name, {})
+            
+            # Track if PDF is not in CSV
+            if metadata_csv and pdf_path.name not in metadata:
+                pdfs_not_in_csv.append(pdf_path.name)
+            
+            # Check if document already exists
+            if doc_id in existing_doc_ids:
+                if skip_existing:
+                    return {
+                        "status": "skipped",
+                        "document_id": doc_id,
+                        "filename": pdf_path.name,
+                        "reason": "Document already exists"
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "document_id": doc_id,
+                        "filename": pdf_path.name,
+                        "error": f"Document '{doc_id}' already exists in database"
+                    }
+            
+            try:
+                # Process PDF to chunks
+                chunker = PDFChunker(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+                chunk_result = chunker.process_pdf(str(pdf_path), doc_id)
+                
+                # Optionally save chunks to disk
+                if save_chunks_to_disk:
+                    chunks_file = output / f"{doc_id}_chunks.json"
+                    with open(chunks_file, 'w', encoding='utf-8') as f:
+                        f.write(chunk_result.to_json())
+                
+                # Create Document node with metadata
+                doc_name = file_metadata.get("title", pdf_path.stem)
+                
+                async with neo4j_driver.session(database=database) as session:
+                    # Build dynamic SET clause for metadata
+                    set_clauses = ["d.name = $name", "d.source = $source", 
+                                   "d.totalChunks = $totalChunks", "d.totalTokens = $totalTokens"]
+                    params = {
+                        "id": doc_id,
+                        "name": doc_name,
+                        "source": str(pdf_path),
+                        "totalChunks": len(chunk_result.chunks),
+                        "totalTokens": chunk_result.total_tokens
+                    }
+                    
+                    # Add metadata properties
+                    for key, value in file_metadata.items():
+                        safe_key = key.replace(" ", "_").replace("-", "_")
+                        set_clauses.append(f"d.{safe_key} = ${safe_key}")
+                        params[safe_key] = value
+                    
+                    query = f"""
+                        MERGE (d:Document {{id: $id}})
+                        SET {', '.join(set_clauses)}
+                        RETURN d
+                    """
+                    await session.run(query, **params)
+                
+                # Create Chunk nodes in batches
+                chunks_created = 0
+                batch_size = 100
+                
+                for i in range(0, len(chunk_result.chunks), batch_size):
+                    batch = chunk_result.chunks[i:i + batch_size]
+                    neo4j_chunks = [
+                        {
+                            "id": c.id,
+                            "text": c.text,
+                            "index": c.index,
+                            "startChar": c.start_char,
+                            "endChar": c.end_char,
+                            "tokenCount": c.token_count,
+                        }
+                        for c in batch
+                    ]
+                    
+                    async with neo4j_driver.session(database=database) as session:
+                        result = await session.run(
+                            QUERIES["create_chunks_batch"],
+                            chunks=neo4j_chunks,
+                            documentId=doc_id
+                        )
+                        record = await result.single()
+                        chunks_created += record["created"] if record else 0
+                
+                # Create NEXT relationships
+                async with neo4j_driver.session(database=database) as session:
+                    result = await session.run(
+                        QUERIES["create_next_relationships"],
+                        documentId=doc_id
+                    )
+                    record = await result.single()
+                    next_rels = record["relationships"] if record else 0
+                
+                return {
+                    "status": "success",
+                    "document_id": doc_id,
+                    "filename": pdf_path.name,
+                    "chunks_created": chunks_created,
+                    "next_relationships": next_rels,
+                    "total_tokens": chunk_result.total_tokens,
+                    "metadata_applied": bool(file_metadata)
+                }
+                
+            except Exception as e:
+                logger.error(f"Failed to process {pdf_path.name}", error=str(e))
+                return {
+                    "status": "error",
+                    "document_id": doc_id,
+                    "filename": pdf_path.name,
+                    "error": str(e)
+                }
+        
+        # Process PDFs in parallel with semaphore
+        semaphore = asyncio.Semaphore(parallel)
+        
+        async def process_with_semaphore(pdf_path: Path) -> Dict[str, Any]:
+            async with semaphore:
+                return await process_single_pdf(pdf_path)
+        
+        # Run all tasks
+        tasks = [process_with_semaphore(pdf) for pdf in pdf_files]
+        results = await asyncio.gather(*tasks)
+        
+        # Add warnings for PDFs not in CSV
+        for pdf_name in pdfs_not_in_csv:
+            warnings.append(f"PDF '{pdf_name}' not found in metadata CSV - processed without metadata")
+        
+        # Compute summary
+        successful = [r for r in results if r["status"] == "success"]
+        skipped = [r for r in results if r["status"] == "skipped"]
+        errors = [r for r in results if r["status"] == "error"]
+        
+        total_chunks = sum(r.get("chunks_created", 0) for r in successful)
+        total_tokens = sum(r.get("total_tokens", 0) for r in successful)
+        
+        # Write manifest file
+        manifest = {
+            "timestamp": datetime.now().isoformat(),
+            "folder_path": str(folder_path),
+            "metadata_csv": metadata_csv,
+            "id_strategy": id_strategy,
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+            "summary": {
+                "total_pdfs": len(pdf_files),
+                "successful": len(successful),
+                "skipped": len(skipped),
+                "errors": len(errors),
+                "total_chunks": total_chunks,
+                "total_tokens": total_tokens
+            },
+            "warnings": warnings,
+            "results": results
+        }
+        
+        manifest_path = output / "manifest.json"
+        with open(manifest_path, 'w', encoding='utf-8') as f:
+            json.dump(manifest, f, indent=2)
+        
+        # Build summary response
+        summary = {
+            "status": "success" if not errors else "partial_success" if successful else "failed",
+            "documents_processed": len(successful),
+            "documents_skipped": len(skipped),
+            "documents_failed": len(errors),
+            "total_chunks": total_chunks,
+            "total_tokens": total_tokens,
+            "manifest_file": str(manifest_path),
+            "warnings": warnings if warnings else None,
+            "errors": [{"filename": e["filename"], "error": e["error"]} for e in errors] if errors else None,
+            "message": f"Processed {len(successful)}/{len(pdf_files)} PDFs. Details in {manifest_path}"
+        }
+        
+        # Remove None values
+        summary = {k: v for k, v in summary.items() if v is not None}
+        
+        logger.info("Folder processing completed", **summary)
+        
+        return json.dumps(summary, indent=2)
     
     return mcp
 
