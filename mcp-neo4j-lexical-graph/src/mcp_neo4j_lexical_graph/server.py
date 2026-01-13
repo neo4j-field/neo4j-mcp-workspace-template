@@ -393,38 +393,64 @@ def create_mcp_server(
     async def embed_chunks(
         document_id: Optional[str] = Field(None, description="Document ID to embed chunks for. If not provided, embeds all chunks without embeddings."),
         parallel: int = Field(default=10, description="Maximum concurrent embedding batches"),
-        model: str = Field(default=embedding_model, description="Embedding model to use (via LiteLLM)")
+        model: str = Field(default=embedding_model, description="Embedding model to use (via LiteLLM)"),
+        node_label: str = Field(default="Chunk", description="Label of nodes to embed (e.g., 'Chunk', 'Page')"),
+        id_property: Optional[str] = Field(default=None, description="Property name for node ID (e.g., 'id', 'chunk_id'). If not provided, uses elementId() for universal compatibility."),
+        text_property: str = Field(default="text", description="Property name for text content to embed")
     ) -> str:
         """
-        Add embeddings to Chunk nodes in Neo4j.
+        Add embeddings to nodes in Neo4j.
         
-        This tool generates embeddings for chunks that don't have them yet
+        This tool generates embeddings for nodes that don't have them yet
         and stores them efficiently using db.create.setNodeVectorProperty.
         
+        Configure node_label, id_property, and text_property to work with any schema:
+        - Default: Chunk nodes with 'id' and 'text' properties
+        - Example: node_label="Chunk", id_property="chunk_id", text_property="text"
+        
         If document_id is provided, only embeds chunks for that document.
-        Otherwise, embeds all chunks without embeddings.
+        Otherwise, embeds all matching nodes without embeddings.
         
         **Progress:** Reports progress during embedding generation.
         
-        **Returns:** Summary of embedded chunks
+        **Returns:** Summary of embedded nodes
         """
+        # Determine ID selection strategy
+        use_element_id = id_property is None
+        id_select = "elementId(c)" if use_element_id else f"c.{id_property}"
+        
         logger.info(
             "Starting chunk embedding",
             document_id=document_id,
             model=model,
-            parallel=parallel
+            parallel=parallel,
+            node_label=node_label,
+            id_property=id_property or "elementId()",
+            text_property=text_property
         )
         
         try:
-            # Get chunks without embeddings
+            # Build dynamic query based on parameters
+            if document_id:
+                query = f"""
+                    MATCH (c:{node_label})-[:PART_OF]->(d:Document {{id: $documentId}})
+                    WHERE c.embedding IS NULL AND c.{text_property} IS NOT NULL
+                    RETURN {id_select} as id, c.{text_property} as text
+                    ORDER BY c.index
+                """
+            else:
+                query = f"""
+                    MATCH (c:{node_label})
+                    WHERE c.embedding IS NULL AND c.{text_property} IS NOT NULL
+                    RETURN {id_select} as id, c.{text_property} as text
+                """
+            
+            # Get nodes without embeddings
             async with neo4j_driver.session(database=database) as session:
                 if document_id:
-                    result = await session.run(
-                        QUERIES["get_chunks_by_document"],
-                        documentId=document_id
-                    )
+                    result = await session.run(query, documentId=document_id)
                 else:
-                    result = await session.run(QUERIES["get_chunks_without_embeddings"])
+                    result = await session.run(query)
                 
                 records = await result.data()
             
@@ -474,6 +500,22 @@ def create_mcp_server(
             ]
             
             # Write embeddings to Neo4j in batches
+            # Build dynamic update query based on ID strategy
+            if use_element_id:
+                update_query = f"""
+                    UNWIND $embeddings AS item
+                    MATCH (c:{node_label}) WHERE elementId(c) = item.id
+                    CALL db.create.setNodeVectorProperty(c, 'embedding', item.embedding)
+                    RETURN count(c) as updated
+                """
+            else:
+                update_query = f"""
+                    UNWIND $embeddings AS item
+                    MATCH (c:{node_label} {{{id_property}: item.id}})
+                    CALL db.create.setNodeVectorProperty(c, 'embedding', item.embedding)
+                    RETURN count(c) as updated
+                """
+            
             batch_size = 100
             total_updated = 0
             
@@ -481,10 +523,7 @@ def create_mcp_server(
                 batch = embeddings_data[i:i + batch_size]
                 
                 async with neo4j_driver.session(database=database) as session:
-                    result = await session.run(
-                        QUERIES["update_chunk_embeddings"],
-                        embeddings=batch
-                    )
+                    result = await session.run(update_query, embeddings=batch)
                     record = await result.single()
                     total_updated += record["updated"] if record else 0
                 
@@ -493,13 +532,16 @@ def create_mcp_server(
             summary = {
                 "status": "success",
                 "document_id": document_id,
+                "node_label": node_label,
+                "id_property": id_property,
+                "text_property": text_property,
                 "model": model,
-                "chunks_processed": total_chunks,
-                "chunks_embedded": total_updated,
-                "message": f"Successfully embedded {total_updated} chunks"
+                "nodes_processed": total_chunks,
+                "nodes_embedded": total_updated,
+                "message": f"Successfully embedded {total_updated} {node_label} nodes"
             }
             
-            logger.info("Chunk embedding completed", **summary)
+            logger.info("Embedding completed", **summary)
             
             return json.dumps(summary, indent=2)
             
