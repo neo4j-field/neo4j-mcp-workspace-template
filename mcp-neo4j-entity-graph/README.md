@@ -1,8 +1,22 @@
 # MCP Neo4j Entity Graph Server
 
+[![PyPI version](https://badge.fury.io/py/mcp-neo4j-entity-graph.svg)](https://pypi.org/project/mcp-neo4j-entity-graph/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 MCP server for extracting entities from graph nodes and creating entity graphs in Neo4j.
 
 **Supports 100+ LLM providers via LiteLLM** (OpenAI, Anthropic, Google, Azure, Bedrock, Ollama, etc.)
+
+## Installation
+
+```bash
+# Using pip
+pip install mcp-neo4j-entity-graph
+
+# Using uv (recommended)
+uv pip install mcp-neo4j-entity-graph
+```
 
 ## Features
 
@@ -187,8 +201,8 @@ Add to your `~/.cursor/mcp.json`:
 {
   "mcpServers": {
     "neo4j-entity-graph": {
-      "command": "uv",
-      "args": ["--directory", "/path/to/mcp-neo4j-entity-graph", "run", "mcp-neo4j-entity-graph"],
+      "command": "uvx",
+      "args": ["mcp-neo4j-entity-graph"],
       "env": {
         "NEO4J_URI": "bolt://localhost:7687",
         "NEO4J_USERNAME": "neo4j",
@@ -200,6 +214,8 @@ Add to your `~/.cursor/mcp.json`:
   }
 }
 ```
+
+> **Note**: `uvx` automatically downloads and runs the package from PyPI. No local installation needed!
 
 ## Rate Limits & Performance
 
