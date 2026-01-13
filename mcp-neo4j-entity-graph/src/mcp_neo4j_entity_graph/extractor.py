@@ -1,14 +1,16 @@
-"""Entity extraction using OpenAI SDK with structured output.
+"""Entity extraction using LiteLLM with structured output.
 
 Uses Pydantic models for structured extraction from text chunks.
-Supports parallelization for processing multiple chunks.
+Supports 100+ LLM providers via LiteLLM (OpenAI, Anthropic, Google, etc.).
+Optimized for high parallelism (default: 20 concurrent extractions).
 """
 
 import asyncio
+import json as json_module
 from typing import Callable, Optional
 
+import litellm
 import structlog
-from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from .models import (
@@ -23,6 +25,19 @@ logger = structlog.get_logger()
 
 # Default extraction model
 DEFAULT_EXTRACTION_MODEL = "gpt-5-mini"
+
+# Models known to support structured output (json_schema)
+# This is for documentation - we use litellm.supports_response_schema() for actual checking
+KNOWN_SUPPORTED_MODELS = [
+    # OpenAI
+    "gpt-5", "gpt-5-mini", "gpt-5-nano",
+    "gpt-4o", "gpt-4o-mini", "gpt-4-turbo",
+    # Anthropic (via tool_use)
+    "claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022",
+    # Google
+    "gemini/gemini-2.5-pro", "gemini/gemini-2.5-flash",
+    "gemini/gemini-1.5-pro", "gemini/gemini-1.5-flash",
+]
 
 
 def build_extraction_prompt(schema: ExtractionSchema) -> str:
@@ -105,16 +120,17 @@ class ExtractionOutput(BaseModel):
 
 
 class EntityExtractor:
-    """Extract entities from text chunks using LLM.
+    """Extract entities from text chunks using LLM via LiteLLM.
     
     Features:
-    - Structured output using OpenAI's native parse API
-    - Pydantic model validation
-    - Async/parallel processing
-    - Retry logic for failed extractions
+    - Multi-provider support via LiteLLM (OpenAI, Anthropic, Google, etc.)
+    - Structured output using response_format with Pydantic models
+    - Async/parallel processing (default: 20 concurrent)
+    - Retry logic with exponential backoff
+    - Clear error messages for rate limits and unsupported models
     
     Example:
-        >>> extractor = EntityExtractor(model="gpt-5-nano")
+        >>> extractor = EntityExtractor(model="gpt-5-mini")
         >>> results = await extractor.extract_from_chunks(chunks, schema)
     """
     
@@ -122,25 +138,47 @@ class EntityExtractor:
         self,
         model: str = DEFAULT_EXTRACTION_MODEL,
         max_retries: int = 3,
-        api_key: Optional[str] = None
     ):
         """Initialize the extractor.
         
         Args:
-            model: OpenAI model identifier
+            model: LiteLLM model identifier (e.g., "gpt-4o-mini", "claude-sonnet-4-20250514")
             max_retries: Maximum retries for failed extractions
-            api_key: OpenAI API key (defaults to OPENAI_API_KEY env var)
+            
+        Raises:
+            ValueError: If the model does not support structured output (json_schema)
         """
         self.model = model
         self.max_retries = max_retries
         
-        # Initialize OpenAI client
-        self.client = AsyncOpenAI(api_key=api_key)
+        # Check if model supports structured output
+        if not self._check_model_support():
+            raise ValueError(
+                f"Model '{model}' does not support structured output (json_schema).\n"
+                f"Supported models include:\n"
+                f"  - OpenAI: gpt-5, gpt-5-mini, gpt-4o, gpt-4o-mini\n"
+                f"  - Anthropic: claude-sonnet-4-20250514, claude-3-5-sonnet-20241022\n"
+                f"  - Google: gemini/gemini-2.5-pro, gemini/gemini-1.5-pro\n"
+                f"Check LiteLLM docs for full list: https://docs.litellm.ai/docs/completion/json_mode"
+            )
         
         logger.info(
             "EntityExtractor initialized",
-            model=model
+            model=model,
+            supports_structured_output=True
         )
+    
+    def _check_model_support(self) -> bool:
+        """Check if the model supports structured output (json_schema)."""
+        try:
+            return litellm.supports_response_schema(self.model)
+        except Exception:
+            # If check fails, assume supported (let the API call fail with clear error)
+            logger.warning(
+                "Could not verify model support, assuming supported",
+                model=self.model
+            )
+            return True
     
     async def extract_from_text(
         self,
@@ -172,45 +210,52 @@ class EntityExtractor:
                     "response_format": ExtractionOutput,  # Pydantic model directly
                 }
                 
-                # Add reasoning_effort for gpt-5 models
-                if "gpt-5" in self.model.lower():
+                # Model-specific parameters
+                model_lower = self.model.lower()
+                if "gpt-5" in model_lower:
+                    # GPT-5 models use reasoning_effort instead of temperature
                     api_params["reasoning_effort"] = "minimal"
+                elif "o1" in model_lower or "o3" in model_lower:
+                    # o1/o3 models don't support temperature
+                    pass
                 else:
-                    # Only add temperature for non-gpt-5 models
+                    # Most other models support temperature
                     api_params["temperature"] = 0.0
                 
-                # Use OpenAI's native structured output with parse()
-                logger.info(
-                    "Calling OpenAI API",
+                logger.debug(
+                    "Calling LiteLLM API",
                     model=self.model,
                     chunk_id=chunk_id,
                     text_length=len(text)
                 )
                 
-                response = await self.client.beta.chat.completions.parse(**api_params)
+                # Use LiteLLM's async completion
+                response = await litellm.acompletion(**api_params)
                 
-                # Log raw response info
-                logger.info(
-                    "OpenAI API response received",
-                    chunk_id=chunk_id,
-                    finish_reason=response.choices[0].finish_reason if response.choices else None,
-                    has_parsed=response.choices[0].message.parsed is not None if response.choices else False
-                )
+                # Parse the response content
+                content = response.choices[0].message.content
                 
-                # Get parsed output
-                extraction = response.choices[0].message.parsed
-                
-                if extraction is None:
-                    logger.error(
-                        "Parsed output is None",
+                if not content:
+                    logger.warning(
+                        "Empty response content",
                         chunk_id=chunk_id,
-                        raw_content=response.choices[0].message.content[:500] if response.choices[0].message.content else None
+                        model=self.model
                     )
-                    raise ValueError("Failed to parse structured output")
+                    return ChunkExtractionResult(chunk_id=chunk_id)
+                
+                # Parse JSON response into Pydantic model
+                try:
+                    extraction = ExtractionOutput.model_validate_json(content)
+                except Exception as parse_error:
+                    logger.error(
+                        "Failed to parse extraction response",
+                        chunk_id=chunk_id,
+                        error=str(parse_error),
+                        content_preview=content[:500] if content else None
+                    )
+                    raise ValueError(f"Failed to parse structured output: {parse_error}")
                 
                 # Convert to our internal models with NORMALIZATION
-                # Parse properties_json for each entity and normalize keys
-                import json as json_module
                 entities = []
                 for e in extraction.entities:
                     try:
@@ -232,28 +277,20 @@ class EntityExtractor:
                     ExtractedRelationship(
                         type=r.type,
                         source_label=r.source_label,
-                        source_key=normalize_key(r.source_key),  # Normalized!
+                        source_key=normalize_key(r.source_key),
                         target_label=r.target_label,
-                        target_key=normalize_key(r.target_key),  # Normalized!
+                        target_key=normalize_key(r.target_key),
                         properties={}
                     )
                     for r in extraction.relationships
                 ]
                 
-                # Log at INFO level to see what's happening
                 if entities or relationships:
-                    logger.info(
+                    logger.debug(
                         "Extraction successful",
                         chunk_id=chunk_id,
                         entities=len(entities),
                         relationships=len(relationships)
-                    )
-                else:
-                    logger.warning(
-                        "Extraction returned EMPTY results",
-                        chunk_id=chunk_id,
-                        model=self.model,
-                        text_length=len(text)
                     )
                 
                 return ChunkExtractionResult(
@@ -261,6 +298,39 @@ class EntityExtractor:
                     entities=entities,
                     relationships=relationships
                 )
+                
+            except litellm.RateLimitError as e:
+                logger.error(
+                    f"Rate limit exceeded (attempt {attempt + 1}/{self.max_retries})",
+                    chunk_id=chunk_id,
+                    error=str(e),
+                    model=self.model
+                )
+                if attempt == self.max_retries - 1:
+                    raise ValueError(
+                        f"Rate limit exceeded after {self.max_retries} attempts. "
+                        f"Try reducing the 'parallel' parameter (current default: 20) to 5-10, "
+                        f"or wait and retry later."
+                    )
+                # Longer backoff for rate limits
+                await asyncio.sleep(2 ** (attempt + 2))
+                
+            except litellm.APIError as e:
+                logger.error(
+                    f"API error (attempt {attempt + 1}/{self.max_retries})",
+                    chunk_id=chunk_id,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    model=self.model
+                )
+                if attempt == self.max_retries - 1:
+                    logger.error(
+                        f"All extraction attempts failed for chunk {chunk_id}",
+                        total_attempts=self.max_retries,
+                        last_error=str(e)
+                    )
+                    return ChunkExtractionResult(chunk_id=chunk_id)
+                await asyncio.sleep(2 ** attempt)
                 
             except Exception as e:
                 logger.error(
@@ -285,7 +355,7 @@ class EntityExtractor:
         self,
         chunks: list[dict],
         schema: ExtractionSchema,
-        parallel: int = 5,
+        parallel: int = 20,
         progress_callback: Optional[Callable[[ProgressUpdate], None]] = None
     ) -> list[ChunkExtractionResult]:
         """Extract entities from multiple chunks in parallel.
@@ -293,7 +363,7 @@ class EntityExtractor:
         Args:
             chunks: List of chunk dicts with 'id' and 'text' keys
             schema: Extraction schema
-            parallel: Maximum concurrent extractions
+            parallel: Maximum concurrent extractions (default: 20)
             progress_callback: Optional callback for progress updates
             
         Returns:
@@ -312,7 +382,6 @@ class EntityExtractor:
         
         semaphore = asyncio.Semaphore(parallel)
         completed = 0
-        results = []
         
         async def process_chunk(chunk: dict) -> ChunkExtractionResult:
             nonlocal completed
@@ -332,13 +401,6 @@ class EntityExtractor:
                         total=total_chunks,
                         message=f"Extracted {completed}/{total_chunks} chunks"
                     ))
-                
-                logger.debug(
-                    f"Chunk extracted",
-                    chunk_id=chunk["id"],
-                    entities=len(result.entities),
-                    relationships=len(result.relationships)
-                )
                 
                 return result
         
@@ -360,8 +422,8 @@ class EntityExtractor:
         return results
     
     async def close(self):
-        """Close the OpenAI client connection."""
-        await self.client.close()
+        """Close any resources (no-op for LiteLLM, kept for API compatibility)."""
+        pass
 
 
 # Convenience function
@@ -369,12 +431,25 @@ async def extract_entities(
     chunks: list[dict],
     schema: ExtractionSchema,
     model: str = DEFAULT_EXTRACTION_MODEL,
-    parallel: int = 5,
+    parallel: int = 20,
     progress_callback: Optional[Callable[[ProgressUpdate], None]] = None
 ) -> list[ChunkExtractionResult]:
     """Extract entities from chunks using the specified schema.
     
     Convenience function that creates an extractor and processes chunks.
+    
+    Args:
+        chunks: List of chunk dicts with 'id' and 'text' keys
+        schema: Extraction schema defining entity and relationship types
+        model: LiteLLM model identifier (default: gpt-5-mini)
+        parallel: Maximum concurrent extractions (default: 20)
+        progress_callback: Optional callback for progress updates
+        
+    Returns:
+        List of extraction results per chunk
+        
+    Raises:
+        ValueError: If the model does not support structured output
     """
     extractor = EntityExtractor(model=model)
     try:

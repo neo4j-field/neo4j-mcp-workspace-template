@@ -3,6 +3,8 @@
 Tools:
 - extract_entities_from_graph: Extract entities from source nodes and create entity graph
 - convert_schema: Convert data modeling output to extraction schema
+
+Optimized for high parallelism with LiteLLM multi-provider support.
 """
 
 import asyncio
@@ -37,26 +39,32 @@ structlog.configure(
 
 logger = structlog.get_logger()
 
+# Default extraction model
+DEFAULT_EXTRACTION_MODEL = "gpt-5-mini"
+
 
 def create_mcp_server(
     neo4j_driver: AsyncDriver,
     database: str = "neo4j",
-    extraction_model: str = "gpt-5-mini"
+    extraction_model: str = DEFAULT_EXTRACTION_MODEL
 ) -> FastMCP:
     """Create the entity graph MCP server with all tools."""
     
     mcp = FastMCP("mcp-neo4j-entity-graph")
     
     # ========================================
-    # Helper: Write chunk extraction to Neo4j
+    # Helper: Write batch of extractions to Neo4j
     # ========================================
     
-    async def write_chunk_extraction_to_neo4j(
-        chunk_result: ChunkExtractionResult,
+    async def write_batch_to_neo4j(
+        results: list[ChunkExtractionResult],
         schema: ExtractionSchema,
         source_label: str
     ) -> dict:
-        """Write extraction results from a single chunk to Neo4j immediately.
+        """Write a batch of extraction results to Neo4j in optimized transactions.
+        
+        Batches all entities by label and all relationships by type for efficient writes.
+        Uses a single session for the entire batch.
         
         Returns stats dict with entities_created, relationships_created, extracted_from_created
         """
@@ -66,52 +74,27 @@ def create_mcp_server(
             "extracted_from_created": 0
         }
         
-        if not chunk_result.entities and not chunk_result.relationships:
-            return stats
-        
-        # Group entities by label
+        # Collect all entities by label across all chunks
         entities_by_label: dict[str, list[dict]] = {}
-        for entity in chunk_result.entities:
-            if entity.label not in entities_by_label:
-                entities_by_label[entity.label] = []
-            
-            entity_schema = schema.get_entity_schema(entity.label)
-            if entity_schema:
-                key_property = entity_schema.key_property
-                key_value = entity.properties.get(key_property)
-                if key_value:
-                    entities_by_label[entity.label].append({
-                        "key_value": key_value,
-                        "properties": entity.properties,
-                        "chunk_id": chunk_result.chunk_id
-                    })
+        for chunk_result in results:
+            for entity in chunk_result.entities:
+                if entity.label not in entities_by_label:
+                    entities_by_label[entity.label] = []
+                
+                entity_schema = schema.get_entity_schema(entity.label)
+                if entity_schema:
+                    key_property = entity_schema.key_property
+                    key_value = entity.properties.get(key_property)
+                    if key_value:
+                        entities_by_label[entity.label].append({
+                            "key_value": key_value,
+                            "properties": entity.properties,
+                            "chunk_id": chunk_result.chunk_id
+                        })
         
-        # Create entities by label with EXTRACTED_FROM relationships
-        for label, entities in entities_by_label.items():
-            entity_schema = schema.get_entity_schema(label)
-            if not entity_schema or not entities:
-                continue
-            
-            query = f"""
-                UNWIND $entities AS entity
-                MERGE (e:{label} {{{entity_schema.key_property}: entity.key_value}})
-                SET e += entity.properties
-                WITH e, entity
-                MATCH (c:{source_label} {{id: entity.chunk_id}})
-                MERGE (e)-[:EXTRACTED_FROM]->(c)
-                RETURN count(DISTINCT e) as entities_created, count(*) as rels_created
-            """
-            
-            async with neo4j_driver.session(database=database) as session:
-                result = await session.run(query, entities=entities)
-                record = await result.single()
-                if record:
-                    stats["entities_created"] += record["entities_created"]
-                    stats["extracted_from_created"] += record["rels_created"]
-        
-        # Create relationships between entities
-        if chunk_result.relationships:
-            rels_by_type: dict[str, list[dict]] = {}
+        # Collect all relationships by type across all chunks
+        rels_by_type: dict[str, list[dict]] = {}
+        for chunk_result in results:
             for rel in chunk_result.relationships:
                 key = f"{rel.type}_{rel.source_label}_{rel.target_label}"
                 if key not in rels_by_type:
@@ -131,7 +114,35 @@ def create_mcp_server(
                         "target_key_value": rel.target_key,
                         "properties": rel.properties
                     })
+        
+        # Use a single session for all writes
+        async with neo4j_driver.session(database=database) as session:
+            # Write all entities by label
+            for label, entities in entities_by_label.items():
+                if not entities:
+                    continue
+                
+                entity_schema = schema.get_entity_schema(label)
+                if not entity_schema:
+                    continue
+                
+                query = f"""
+                    UNWIND $entities AS entity
+                    MERGE (e:{label} {{{entity_schema.key_property}: entity.key_value}})
+                    SET e += entity.properties
+                    WITH e, entity
+                    MATCH (c:{source_label} {{id: entity.chunk_id}})
+                    MERGE (e)-[:EXTRACTED_FROM]->(c)
+                    RETURN count(DISTINCT e) as entities_created, count(*) as rels_created
+                """
+                
+                result = await session.run(query, entities=entities)
+                record = await result.single()
+                if record:
+                    stats["entities_created"] += record["entities_created"]
+                    stats["extracted_from_created"] += record["rels_created"]
             
+            # Write all relationships by type
             for key, rels in rels_by_type.items():
                 if not rels:
                     continue
@@ -146,10 +157,9 @@ def create_mcp_server(
                     RETURN count(r) as created
                 """
                 
-                async with neo4j_driver.session(database=database) as session:
-                    result = await session.run(query, relationships=rels)
-                    record = await result.single()
-                    stats["relationships_created"] += record["created"] if record else 0
+                result = await session.run(query, relationships=rels)
+                record = await result.single()
+                stats["relationships_created"] += record["created"] if record else 0
         
         return stats
     
@@ -172,7 +182,8 @@ def create_mcp_server(
         source_label: str = Field(default="Chunk", description="Label of source nodes to extract from"),
         source_text_property: str = Field(default="text", description="Property containing text to extract from"),
         force: bool = Field(default=False, description="If true, extract from all nodes. If false, only from nodes without prior extraction."),
-        parallel: int = Field(default=5, description="Maximum concurrent extractions"),
+        parallel: int = Field(default=20, description="Maximum concurrent extractions (default: 20, reduce to 5-10 if hitting rate limits)"),
+        batch_size: int = Field(default=10, description="Number of chunks to batch before writing to Neo4j"),
         model: Optional[str] = Field(default=None, description="LLM model to use (defaults to EXTRACTION_MODEL env var)")
     ) -> str:
         """
@@ -194,7 +205,9 @@ def create_mcp_server(
             "Starting entity extraction from graph",
             source_label=source_label,
             force=force,
-            model=actual_model
+            model=actual_model,
+            parallel=parallel,
+            batch_size=batch_size
         )
         
         try:
@@ -209,7 +222,7 @@ def create_mcp_server(
             
             schema = ExtractionSchema.model_validate(schema_data)
             
-            # Build query to get source nodes (simple: just match by label)
+            # Build query to get source nodes
             if force:
                 query = f"""
                     MATCH (n:{source_label})
@@ -242,8 +255,11 @@ def create_mcp_server(
             total_chunks = len(chunks)
             logger.info(f"Found {total_chunks} nodes to process")
             
-            # Create extractor
-            extractor = EntityExtractor(model=actual_model)
+            # Create extractor (validates model support)
+            try:
+                extractor = EntityExtractor(model=actual_model)
+            except ValueError as e:
+                raise ToolError(str(e))
             
             # Track totals
             total_stats = {
@@ -254,58 +270,74 @@ def create_mcp_server(
                 "extracted_from_created": 0,
                 "entity_labels": set()
             }
-            completed = 0
-            semaphore = asyncio.Semaphore(parallel)
             
-            async def extract_and_write_chunk(chunk: dict) -> dict:
-                """Extract from one chunk and write to Neo4j immediately."""
-                nonlocal completed
-                
+            # Process chunks in batches for optimized Neo4j writes
+            semaphore = asyncio.Semaphore(parallel)
+            extraction_buffer: list[ChunkExtractionResult] = []
+            buffer_lock = asyncio.Lock()
+            completed = 0
+            batches_written = 0
+            
+            async def extract_chunk(chunk: dict) -> ChunkExtractionResult:
+                """Extract from one chunk."""
                 async with semaphore:
-                    # Extract
-                    chunk_result = await extractor.extract_from_text(
+                    return await extractor.extract_from_text(
                         text=chunk["text"],
                         schema=schema,
                         chunk_id=chunk["id"]
                     )
-                    
-                    # Write to Neo4j immediately
-                    write_stats = await write_chunk_extraction_to_neo4j(
-                        chunk_result=chunk_result,
-                        schema=schema,
-                        source_label=source_label
-                    )
-                    
-                    # Update progress
-                    completed += 1
-                    logger.info(
-                        f"✅ [{completed}/{total_chunks}] Chunk processed",
-                        chunk_id=chunk["id"],
-                        entities=len(chunk_result.entities),
-                        relationships=len(chunk_result.relationships),
-                        written_entities=write_stats["entities_created"]
-                    )
-                    
-                    return {
-                        "chunk_id": chunk["id"],
-                        "entities_extracted": len(chunk_result.entities),
-                        "relationships_extracted": len(chunk_result.relationships),
-                        "entity_labels": [e.label for e in chunk_result.entities],
-                        **write_stats
-                    }
             
-            # Process all chunks in parallel (extract + write per chunk)
-            tasks = [extract_and_write_chunk(chunk) for chunk in chunks]
-            results = await asyncio.gather(*tasks)
+            async def flush_buffer():
+                """Write buffered results to Neo4j."""
+                nonlocal batches_written
+                async with buffer_lock:
+                    if not extraction_buffer:
+                        return {}
+                    
+                    to_write = extraction_buffer.copy()
+                    extraction_buffer.clear()
+                
+                batches_written += 1
+                logger.info(f"Writing batch {batches_written} ({len(to_write)} chunks) to Neo4j")
+                return await write_batch_to_neo4j(to_write, schema, source_label)
             
-            # Aggregate results
-            for result in results:
-                total_stats["entities_extracted"] += result["entities_extracted"]
-                total_stats["entities_created"] += result["entities_created"]
-                total_stats["relationships_extracted"] += result["relationships_extracted"]
-                total_stats["relationships_created"] += result["relationships_created"]
-                total_stats["extracted_from_created"] += result["extracted_from_created"]
-                total_stats["entity_labels"].update(result["entity_labels"])
+            # Extract all chunks in parallel
+            tasks = [extract_chunk(chunk) for chunk in chunks]
+            
+            for coro in asyncio.as_completed(tasks):
+                result = await coro
+                completed += 1
+                
+                # Track extraction stats
+                total_stats["entities_extracted"] += len(result.entities)
+                total_stats["relationships_extracted"] += len(result.relationships)
+                total_stats["entity_labels"].update(e.label for e in result.entities)
+                
+                # Add to buffer
+                async with buffer_lock:
+                    extraction_buffer.append(result)
+                    buffer_len = len(extraction_buffer)
+                
+                # Log progress
+                logger.info(
+                    f"✅ [{completed}/{total_chunks}] Chunk extracted",
+                    chunk_id=result.chunk_id,
+                    entities=len(result.entities),
+                    relationships=len(result.relationships)
+                )
+                
+                # Flush buffer when it reaches batch_size
+                if buffer_len >= batch_size:
+                    write_stats = await flush_buffer()
+                    total_stats["entities_created"] += write_stats.get("entities_created", 0)
+                    total_stats["relationships_created"] += write_stats.get("relationships_created", 0)
+                    total_stats["extracted_from_created"] += write_stats.get("extracted_from_created", 0)
+            
+            # Flush any remaining results
+            write_stats = await flush_buffer()
+            total_stats["entities_created"] += write_stats.get("entities_created", 0)
+            total_stats["relationships_created"] += write_stats.get("relationships_created", 0)
+            total_stats["extracted_from_created"] += write_stats.get("extracted_from_created", 0)
             
             await extractor.close()
             
@@ -314,6 +346,7 @@ def create_mcp_server(
                 "model": actual_model,
                 "source_label": source_label,
                 "nodes_processed": total_chunks,
+                "batches_written": batches_written,
                 "entities_extracted": total_stats["entities_extracted"],
                 "entities_created": total_stats["entities_created"],
                 "relationships_extracted": total_stats["relationships_extracted"],
@@ -447,7 +480,7 @@ async def main(
     username: Optional[str] = None,
     password: Optional[str] = None,
     database: str = "neo4j",
-    extraction_model: str = "gpt-5-mini",
+    extraction_model: str = DEFAULT_EXTRACTION_MODEL,
     transport: Literal["stdio", "sse"] = "stdio",
     host: str = "127.0.0.1",
     port: int = 8002,

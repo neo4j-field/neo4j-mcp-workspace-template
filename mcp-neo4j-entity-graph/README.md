@@ -1,18 +1,34 @@
 # MCP Neo4j Entity Graph Server
 
-**Status:** POC (Proof of Concept)
-
 MCP server for extracting entities from graph nodes and creating entity graphs in Neo4j.
+
+**Supports 100+ LLM providers via LiteLLM** (OpenAI, Anthropic, Google, Azure, Bedrock, Ollama, etc.)
 
 ## Features
 
-- **LLM-based extraction**: Uses OpenAI SDK with structured output (gpt-5-mini recommended)
+- **Multi-provider LLM support**: Use any LLM via LiteLLM (OpenAI, Claude, Gemini, etc.)
+- **Structured output**: Uses JSON schema for reliable entity extraction
 - **Direct graph creation**: Entities created directly in Neo4j (no intermediate files)
 - **Schema-driven**: Define what entities/relationships to extract
 - **Provenance tracking**: EXTRACTED_FROM relationships link entities to source nodes
-- **Parallelization**: Concurrent extraction for speed
+- **High parallelism**: Default 20 concurrent extractions (configurable)
+- **Batched writes**: Optimized Neo4j writes (batch every 10 chunks by default)
 - **Incremental**: Only processes nodes without prior extraction (unless force=true)
 - **Key normalization**: Entity keys are normalized (lowercase) for better matching
+
+## Supported Models
+
+Models must support structured output (JSON schema). Tested models include:
+
+| Provider | Models |
+|----------|--------|
+| **OpenAI** | `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4o`, `gpt-4o-mini` |
+| **Anthropic** | `claude-sonnet-4-20250514`, `claude-3-5-sonnet-20241022` |
+| **Google** | `gemini/gemini-2.5-pro`, `gemini/gemini-2.5-flash`, `gemini/gemini-1.5-pro` |
+| **Azure OpenAI** | `azure/gpt-4o`, `azure/gpt-4o-mini` |
+| **AWS Bedrock** | `bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0` |
+
+> **Note**: If a model doesn't support structured output, you'll get a clear error message with suggestions.
 
 ## Tools
 
@@ -21,26 +37,47 @@ MCP server for extracting entities from graph nodes and creating entity graphs i
 Extracts entities from source nodes and creates entity graph directly in Neo4j.
 
 **Parameters:**
-- `schema_json`: Path to JSON schema file or inline JSON string
-- `source_label`: Label of source nodes (default: "Chunk")
-- `source_text_property`: Property containing text (default: "text")
-- `force`: If true, reprocess all nodes (default: false)
-- `parallel`: Concurrent extractions (default: 5)
-- `model`: LLM model to use (default: from EXTRACTION_MODEL env)
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `schema_json` | required | Path to JSON schema file or inline JSON string |
+| `source_label` | "Chunk" | Label of source nodes to extract from |
+| `source_text_property` | "text" | Property containing text to extract from |
+| `force` | false | If true, reprocess all nodes |
+| `parallel` | 20 | Concurrent extractions (reduce to 5-10 if hitting rate limits) |
+| `batch_size` | 10 | Chunks to batch before writing to Neo4j |
+| `model` | env var | LLM model to use (from EXTRACTION_MODEL env) |
 
 **Workflow:**
 1. Queries all nodes with the specified label: `MATCH (n:{source_label}) WHERE NOT (n)<-[:EXTRACTED_FROM]-()`
-2. LLM extracts entities using structured output (per node)
-3. Creates entity nodes + EXTRACTED_FROM relationships immediately after each node
-4. Creates relationships between entities
+2. Extracts entities using LLM with structured output (parallel)
+3. Batches results and writes to Neo4j (optimized transactions)
+4. Creates EXTRACTED_FROM relationships for provenance
 
 **Examples:**
+
 ```python
-# Extract from Chunk nodes (default)
+# Extract from Chunk nodes with default model
 extract_entities_from_graph(schema_json="/path/to/schema.json")
 
+# Use a specific model
+extract_entities_from_graph(
+    schema_json="/path/to/schema.json",
+    model="claude-sonnet-4-20250514"
+)
+
+# Reduce parallelism if hitting rate limits
+extract_entities_from_graph(
+    schema_json="/path/to/schema.json",
+    parallel=5
+)
+
 # Extract from Page nodes
-extract_entities_from_graph(schema_json="/path/to/schema.json", source_label="Page")
+extract_entities_from_graph(
+    schema_json="/path/to/schema.json",
+    source_label="Page",
+    source_text_property="content"
+)
 
 # Force re-extraction of all nodes
 extract_entities_from_graph(schema_json="/path/to/schema.json", force=True)
@@ -85,12 +122,62 @@ Converts data model output from the Data Modeling MCP to extraction schema forma
 
 ## Environment Variables
 
-- `NEO4J_URI`: Neo4j connection URI (default: bolt://localhost:7687)
-- `NEO4J_USERNAME`: Neo4j username (default: neo4j)
-- `NEO4J_PASSWORD`: Neo4j password
-- `NEO4J_DATABASE`: Neo4j database (default: neo4j)
-- `OPENAI_API_KEY`: OpenAI API key
-- `EXTRACTION_MODEL`: Default extraction model (default: gpt-5-mini)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NEO4J_URI` | bolt://localhost:7687 | Neo4j connection URI |
+| `NEO4J_USERNAME` | neo4j | Neo4j username |
+| `NEO4J_PASSWORD` | (required) | Neo4j password |
+| `NEO4J_DATABASE` | neo4j | Neo4j database name |
+| `EXTRACTION_MODEL` | gpt-5-mini | Default LLM model for extraction |
+| `OPENAI_API_KEY` | - | Required for OpenAI models |
+| `ANTHROPIC_API_KEY` | - | Required for Anthropic models |
+| `GEMINI_API_KEY` | - | Required for Google Gemini models |
+
+## LLM Provider Configuration
+
+LiteLLM supports 100+ providers. Set the appropriate API key for your provider:
+
+### OpenAI (default)
+```bash
+export OPENAI_API_KEY="sk-..."
+export EXTRACTION_MODEL="gpt-5-mini"  # or gpt-4o-mini, gpt-4o
+```
+
+### Anthropic Claude
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+export EXTRACTION_MODEL="claude-sonnet-4-20250514"
+```
+
+### Google Gemini
+```bash
+export GEMINI_API_KEY="..."
+export EXTRACTION_MODEL="gemini/gemini-2.5-pro"
+```
+
+### Azure OpenAI
+```bash
+export AZURE_API_KEY="..."
+export AZURE_API_BASE="https://your-resource.openai.azure.com/"
+export AZURE_API_VERSION="2024-02-15-preview"
+export EXTRACTION_MODEL="azure/your-deployment-name"
+```
+
+### AWS Bedrock
+```bash
+export AWS_ACCESS_KEY_ID="..."
+export AWS_SECRET_ACCESS_KEY="..."
+export AWS_REGION_NAME="us-east-1"
+export EXTRACTION_MODEL="bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"
+```
+
+### Local Models (Ollama)
+```bash
+export EXTRACTION_MODEL="ollama/llama3.1"
+# Note: Local models may not support structured output
+```
+
+> See [LiteLLM docs](https://docs.litellm.ai/docs/providers) for all providers.
 
 ## Usage with Cursor
 
@@ -114,6 +201,34 @@ Add to your `~/.cursor/mcp.json`:
 }
 ```
 
+## Rate Limits & Performance
+
+### Parallelism
+
+The default parallelism is **20** concurrent extractions, optimized for fast processing. However, this may exceed rate limits for some providers.
+
+**If you see rate limit errors**, reduce the `parallel` parameter:
+
+```python
+# For rate-limited accounts
+extract_entities_from_graph(
+    schema_json="/path/to/schema.json",
+    parallel=5  # Reduce from default 20
+)
+```
+
+### Batch Size
+
+Extractions are batched before writing to Neo4j (default: 10 chunks per batch). This reduces Neo4j transactions while maintaining progress visibility.
+
+```python
+# Larger batches for better Neo4j performance
+extract_entities_from_graph(
+    schema_json="/path/to/schema.json",
+    batch_size=20
+)
+```
+
 ## Usage Example
 
 ```python
@@ -126,14 +241,32 @@ convert_schema(
 
 # 2. Extract entities from all Chunk nodes
 extract_entities_from_graph(
-    schema_json="/path/to/schema.json",
-    parallel=5
+    schema_json="/path/to/schema.json"
 )
+# Default: parallel=20, batch_size=10, model=gpt-5-mini
 
-# Or extract from a different node type
+# 3. Use a different model
 extract_entities_from_graph(
     schema_json="/path/to/schema.json",
-    source_label="Page",
-    source_text_property="content"
+    model="claude-sonnet-4-20250514",
+    parallel=10  # Claude may have stricter rate limits
 )
+```
+
+## Graph Schema
+
+After extraction, your Neo4j database will contain:
+
+```
+(:Entity)-[:EXTRACTED_FROM]->(:Chunk)
+(:Entity)-[relationship]->(:Entity)
+```
+
+Example query to explore extracted entities:
+
+```cypher
+// Find all entities extracted from a document
+MATCH (e)-[:EXTRACTED_FROM]->(c:Chunk)-[:PART_OF]->(d:Document {name: "my-document"})
+RETURN labels(e)[0] as type, count(e) as count
+ORDER BY count DESC
 ```

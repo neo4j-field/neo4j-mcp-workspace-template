@@ -1,16 +1,31 @@
 [project]
 name = "mcp-neo4j-entity-graph"
-version = "0.1.0"
-description = "MCP server for extracting entities from text chunks and creating entity graphs in Neo4j"
+version = "0.2.0"
+description = "MCP server for extracting entities from text chunks and creating entity graphs in Neo4j. Supports 100+ LLM providers via LiteLLM."
 readme = "README.md"
 requires-python = ">=3.11"
+license = {text = "MIT"}
+keywords = ["neo4j", "mcp", "entity-extraction", "knowledge-graph", "llm", "litellm", "rag"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "fastmcp>=2.0.0",
     "neo4j>=5.0.0",
-    "openai>=1.0.0",
+    "litellm>=1.40.0",
     "pydantic>=2.0.0",
     "structlog>=24.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/neo4j-field/neo4j-mcp-workspace-template"
+Documentation = "https://github.com/neo4j-field/neo4j-mcp-workspace-template#readme"
+Repository = "https://github.com/neo4j-field/neo4j-mcp-workspace-template"
 
 [project.scripts]
 mcp-neo4j-entity-graph = "mcp_neo4j_entity_graph:run"
