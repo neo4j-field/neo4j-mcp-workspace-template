@@ -33,4 +33,6 @@ Process:
 ## Refine Data Model with User Feedback
 * Prompt the user to provide any feedback on the graph data model
 * Make any necessary changes and repeat step 2
+
+## Final Data Model
 * If no changes are necessary, then persist the data model as json in `data_models/`
