@@ -1,0 +1,74 @@
+---
+name: develop-neo4j-graph
+description: Develop Neo4j graphs end-to-end: analyze source data, design data models, ingest data, and validate with Cypher queries. Use when importing data to Neo4j, designing graph data models, creating knowledge graphs, or working with the Neo4j Data Modeling MCP server.
+---
+
+# Develop Neo4j Graph
+
+## Progress Checklist
+
+Copy this checklist to track progress:
+
+```
+- [ ] Step 1: Run discovery on sample of source data
+- [ ] Step 2: Iteratively design the graph data model
+- [ ] Step 3: Ingest source data according to finalized data model
+- [ ] Step 4: Generate Cypher according to use cases
+- [ ] Step 5: Validate that graph adequately addresses use cases
+```
+
+## 1. Run discovery on sample of source data 
+* Read samples of source data provided by the user. These may be tables or unstructured data from PDFs or websites.
+* Assess whether the use cases provided by the user apply to the source data. 
+  * Use cases should always be provided, unless the user is only interested in simply exploring graph.
+* Reference [HANDLE_STRUCTURED_DATA.md](./references/HANDLE_STRUCTURED_DATA.md) for guidance on handling structured source data
+* Reference [HANDLE_UNSTRUCTURED_DATA.md](./references/HANDLE_UNSTRUCTURED_DATA.md) for guidance on handling unstructured source data
+
+
+## 2. Iteratively Design The Graph Data Model
+
+Reference the process contained in [GRAPH_DATA_MODELING_MCP.md](./references/GRAPH_DATA_MODELING_MCP.md) to develop the graph data model.
+
+## 3. Ingest source data according to finalized data model
+
+Use the provided MCP servers in this project to ingest both structured and unstructured data.
+
+* Reference [HANDLE_STRUCTURED_DATA.md](./references/HANDLE_STRUCTURED_DATA.md) for guidance on handling structured source data
+* Reference [HANDLE_UNSTRUCTURED_DATA.md](./references/HANDLE_UNSTRUCTURED_DATA.md) for guidance on handling unstructured source data
+
+## 4. Generate Cypher according to use cases defined during discovery
+* Each use case should have one or more Cypher queries attached to it that provide the appropriate context
+* These Cypher queries should be persisted in a yaml file that follows this format
+
+### YAML Format
+```yaml
+analytical_queries:
+    use_case_key:
+        name:
+        cyphers:
+```
+
+### Example Analytical Cypher YAML
+```yaml
+analytical_queries:
+  apple_count:
+    name: How many apples are in the basket?
+    cyphers:
+      - MATCH (a:Apple)-[:IN_BASKET]->(b:Basket {id: $basketId}) RETURN COUNT(*)
+  
+  apple_and_basket_counts:
+    name: How many apples are there and how many baskets are there?
+    cyphers:
+      - |
+        MATCH (a:Apple) 
+        WITH DISTINCT a
+        RETURN COUNT(*) as apple_count
+      - |
+        MATCH (b:Basket) 
+        WITH DISTINCT b
+        RETURN COUNT(*) as basket_count
+```
+
+## 5. Validate that graph adequately addresses the use cases 
+* Use the Cypher MCP Server to execute the analytical Cypher queries against the Neo4j database
+* Analyze the results and ensure that they are addressing the original use cases
