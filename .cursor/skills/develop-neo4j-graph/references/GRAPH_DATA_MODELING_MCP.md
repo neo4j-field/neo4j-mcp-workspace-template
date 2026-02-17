@@ -1,9 +1,3 @@
----
-name: Develop a Graph Data Model with Neo4j Data Modeling MCP Server
-description: Use the Neo4j Data Modeling MCP server to create valid graph data models. Use to understand the process and order in which MCP tooling and resources should be utilized.
-alwaysApply: false
----
-
 # Develop a Graph Data Model with Neo4j Data Modeling MCP Server
 
 Details the data modeling process with the Neo4j Data Modeling MCP server.

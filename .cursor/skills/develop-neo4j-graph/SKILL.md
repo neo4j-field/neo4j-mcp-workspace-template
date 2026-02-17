@@ -1,8 +1,21 @@
 ---
-name: Develop Neo4j Graph
-description: Develop a Neo4j graph, end-to-end, from analyzing source data to validating a final graph in Neo4j. Use to understand the steps necessary to complete each task in this process.
-alwaysApply: false
+name: develop-neo4j-graph
+description: Develop Neo4j graphs end-to-end: analyze source data, design data models, ingest data, and validate with Cypher queries. Use when importing data to Neo4j, designing graph data models, creating knowledge graphs, or working with the Neo4j Data Modeling MCP server.
 ---
+
+# Develop Neo4j Graph
+
+## Progress Checklist
+
+Copy this checklist to track progress:
+
+```
+- [ ] Step 1: Run discovery on sample of source data
+- [ ] Step 2: Iteratively design the graph data model
+- [ ] Step 3: Ingest source data according to finalized data model
+- [ ] Step 4: Generate Cypher according to use cases
+- [ ] Step 5: Validate that graph adequately addresses use cases
+```
 
 ## 1. Run discovery on sample of source data 
 * Read samples of source data provided by the user. These may be tables or unstructured data from PDFs or websites.
