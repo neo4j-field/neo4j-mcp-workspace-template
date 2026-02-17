@@ -2,7 +2,7 @@
     "mcpServers": {
       "neo4j-data-modeling": {
         "command": "uvx",
-        "args": [ "mcp-neo4j-data-modeling@0.8.0", "--transport", "stdio" ]
+        "args": [ "mcp-neo4j-data-modeling@0.8.2", "--transport", "stdio" ]
     },
     "neo4j-cypher": {
         "command": "uvx",
