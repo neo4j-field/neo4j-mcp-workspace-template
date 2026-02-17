@@ -6,9 +6,11 @@ alwaysApply: false
 
 ## 1. Run discovery on sample of source data 
 * Read samples of source data provided by the user. These may be tables or unstructured data from PDFs or websites.
+* Assess whether the use cases provided by the user apply to the source data. 
+  * Use cases should always be provided, unless the user is only interested in simply exploring graph.
 * Reference [HANDLE_STRUCTURED_DATA.md](./references/HANDLE_STRUCTURED_DATA.md) for guidance on handling structured source data
 * Reference [HANDLE_UNSTRUCTURED_DATA.md](./references/HANDLE_UNSTRUCTURED_DATA.md) for guidance on handling unstructured source data
-* Assess whether the use cases provided by the user apply to the source data. Use cases should always be provided, unless the user is only interested in simply exploring graph.
+
 
 ## 2. Iteratively Design The Graph Data Model
 
