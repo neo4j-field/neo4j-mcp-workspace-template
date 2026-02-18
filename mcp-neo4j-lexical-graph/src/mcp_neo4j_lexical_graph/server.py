@@ -1,376 +1,493 @@
-"""MCP server for creating lexical graphs from PDF documents.
+"""MCP server for creating rich lexical graphs from PDFs.
 
 Tools:
-- process_pdf_to_chunks: Extract text from PDF and create chunks (single file)
-- create_lexical_graph: Create Document and Chunk nodes in Neo4j (single file)
-- create_lexical_graph_from_folder: Batch process folder of PDFs into Neo4j
-- embed_chunks: Add embeddings to existing Chunk nodes
+- create_lexical_graph: Parse PDF(s) and write graph (runs in background)
+- check_processing_status: Monitor background job progress
+- cancel_job: Cancel a running background job
+- chunk_lexical_graph: Create Chunk nodes from Elements in the graph
+- embed_chunks: Add embeddings to Chunk nodes
+- verify_lexical_graph: Structural checks + content reconstruction
+- list_documents: Inventory of documents in the graph
+- delete_document: Remove a document version with cascade
+- set_active_version / clean_inactive: Version management
+- assign_section_hierarchy: LLM-based section level assignment + heading chain propagation
+- generate_chunk_descriptions: VLM-based image/table chunk descriptions
 """
 
+from __future__ import annotations
+
 import asyncio
-import csv
-import hashlib
 import json
 import logging
+import multiprocessing
 import os
+import re
 import sys
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal, Optional
 
 import structlog
 from fastmcp import FastMCP
-
-# Configure structlog to write to stderr (required for MCP stdio transport)
-structlog.configure(
-    processors=[
-        structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.dev.ConsoleRenderer()
-    ],
-    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
-    context_class=dict,
-    logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
-    cache_logger_on_first_use=True
-)
 from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from neo4j import AsyncGraphDatabase, AsyncDriver
 from pydantic import Field
 
-from .chunker import PDFChunker
+from .chunkers.by_page import ByPageChunker
+from .chunkers.by_section import BySectionChunker
+from .chunkers.structured import StructuredChunker
+from .chunkers.token_window import TokenWindowChunker
 from .embedder import ChunkEmbedder
-from .models import Chunk, ChunkingResult, Document, ProgressUpdate
+from .graph_reader import (
+    delete_chunks_for_document,
+    delete_document_cascade,
+    deactivate_chunks_for_document,
+    get_document,
+    get_elements_for_document,
+    get_existing_chunk_set_versions,
+    get_pages_for_document,
+    get_sections_for_document,
+    list_all_documents,
+)
+from .graph_writer import (
+    deactivate_versions,
+    ensure_constraints,
+    get_existing_versions,
+    write_parsed_document,
+)
+from .job_manager import JobManager, JobStatus
+from .models import ParsedDocument
+from .postprocessing.section_hierarchy import assign_section_hierarchy as _assign_hierarchy
+from .postprocessing.description_generator import generate_descriptions_batch as _generate_descriptions
+
+# Configure structlog
+structlog.configure(
+    processors=[
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.dev.ConsoleRenderer(),
+    ],
+    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+    context_class=dict,
+    logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
+    cache_logger_on_first_use=True,
+)
 
 logger = structlog.get_logger()
 
-# Cypher queries for lexical graph operations
-QUERIES = {
-    # Constraints
-    "create_document_constraint": """
-        CREATE CONSTRAINT document_id IF NOT EXISTS
-        FOR (d:Document) REQUIRE d.id IS UNIQUE
-    """,
-    "create_chunk_constraint": """
-        CREATE CONSTRAINT chunk_id IF NOT EXISTS
-        FOR (c:Chunk) REQUIRE c.id IS UNIQUE
-    """,
-    
-    # Vector index (Neo4j 5.11+)
-    # Using 1536 dimensions for text-embedding-3-small
-    "create_vector_index": """
-        CREATE VECTOR INDEX chunk_text_embedding IF NOT EXISTS
-        FOR (c:Chunk) ON (c.embedding)
-        OPTIONS {indexConfig: {
-            `vector.dimensions`: $dimensions,
-            `vector.similarity_function`: 'cosine'
-        }}
-    """,
-    
-    # Node creation
-    "create_document": """
-        MERGE (d:Document {id: $id})
-        SET d.name = $name,
-            d.source = $source,
-            d.totalChunks = $totalChunks,
-            d.totalTokens = $totalTokens
-        RETURN d
-    """,
-    
-    "create_chunks_batch": """
-        UNWIND $chunks AS chunk
-        MERGE (c:Chunk {id: chunk.id})
-        SET c.text = chunk.text,
-            c.index = chunk.index,
-            c.startChar = chunk.startChar,
-            c.endChar = chunk.endChar,
-            c.tokenCount = chunk.tokenCount
-        WITH c, chunk
-        MATCH (d:Document {id: $documentId})
-        MERGE (c)-[:PART_OF]->(d)
-        RETURN count(c) as created
-    """,
-    
-    # NEXT relationships for chunk sequence
-    "create_next_relationships": """
-        MATCH (d:Document {id: $documentId})<-[:PART_OF]-(c:Chunk)
-        WITH c ORDER BY c.index
-        WITH collect(c) AS chunks
-        UNWIND range(0, size(chunks)-2) AS i
-        WITH chunks[i] AS current, chunks[i+1] AS next
-        MERGE (current)-[:NEXT]->(next)
-        RETURN count(*) as relationships
-    """,
-    
-    # Embedding update using db.create.setNodeVectorProperty (Neo4j 5.13+)
-    "update_chunk_embeddings": """
-        UNWIND $embeddings AS item
-        MATCH (c:Chunk {id: item.id})
-        CALL db.create.setNodeVectorProperty(c, 'embedding', item.embedding)
-        RETURN count(c) as updated
-    """,
-    
-    # Query chunks without embeddings
-    "get_chunks_without_embeddings": """
-        MATCH (c:Chunk)
-        WHERE c.embedding IS NULL
-        RETURN c.id as id, c.text as text
-        ORDER BY c.id
-    """,
-    
-    # Query chunks by document
-    "get_chunks_by_document": """
-        MATCH (c:Chunk)-[:PART_OF]->(d:Document {id: $documentId})
-        WHERE c.embedding IS NULL
-        RETURN c.id as id, c.text as text
-        ORDER BY c.index
-    """,
-    
-    # Get embedding dimensions from existing chunks
-    "get_embedding_dimensions": """
-        MATCH (c:Chunk)
-        WHERE c.embedding IS NOT NULL
-        RETURN size(c.embedding) as dimensions
-        LIMIT 1
-    """
+
+# Time-per-page estimates (seconds) for pre-flight warnings
+_TIME_PER_PAGE: dict[str, float] = {
+    "pymupdf": 1.5,
+    "page_image": 2.5,
+    "docling": 15.0,
 }
+
+# Threshold (seconds) above which a warning is included in the response
+_WARNING_THRESHOLD_SECONDS = 120
+
+
+DEFAULT_EXTRACTION_MODEL = "gpt-5-mini"
 
 
 def create_mcp_server(
     neo4j_driver: AsyncDriver,
     database: str = "neo4j",
     embedding_model: str = "text-embedding-3-small",
-    default_chunk_size: int = 500,
-    default_chunk_overlap: int = 50
+    extraction_model: str = DEFAULT_EXTRACTION_MODEL,
+    job_manager: JobManager | None = None,
+    process_pool: ProcessPoolExecutor | None = None,
 ) -> FastMCP:
-    """Create the lexical graph MCP server with all tools."""
-    
-    mcp = FastMCP("mcp-neo4j-lexical-graph")
-    
-    # ========================================
-    # TOOL 1: Process PDF to Chunks
-    # ========================================
-    
-    @mcp.tool(
-        name="process_pdf_to_chunks",
-        annotations=ToolAnnotations(
-            title="Process PDF to Chunks",
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=False,
-        ),
-    )
-    async def process_pdf_to_chunks(
-        pdf_path: str = Field(..., description="Path to the PDF file to process"),
-        document_id: str = Field(..., description="Unique identifier for the document"),
-        output_dir: str = Field(..., description="Directory to save the chunks JSON file"),
-        chunk_size: int = Field(default=default_chunk_size, description="Target chunk size in tokens"),
-        chunk_overlap: int = Field(default=default_chunk_overlap, description="Overlap between chunks in tokens")
-    ) -> str:
-        """
-        Extract text from a PDF and split into chunks.
-        
-        This tool processes a PDF file using PyMuPDF and splits the text into
-        overlapping chunks based on token count. The chunks are saved to a JSON
-        file in the specified output directory.
-        
-        **Returns:** JSON with file path and summary (not the full chunks)
-        """
-        logger.info(
-            "Processing PDF to chunks",
-            pdf_path=pdf_path,
-            document_id=document_id,
-            output_dir=output_dir,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap
-        )
-        
-        try:
-            # Create output directory if needed
-            output_path = os.path.join(output_dir, f"{document_id}_chunks.json")
-            os.makedirs(output_dir, exist_ok=True)
-            
-            chunker = PDFChunker(
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap
-            )
-            result = chunker.process_pdf(pdf_path, document_id)
-            
-            # Write chunks to file
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(result.to_json())
-            
-            logger.info(f"Chunks saved to {output_path}")
-            
-            # Return summary (not the full chunks)
-            summary = {
-                "status": "success",
-                "chunks_file": output_path,
-                "document_id": result.document_id,
-                "source_path": result.source_path,
-                "total_pages": result.total_pages,
-                "total_chunks": len(result.chunks),
-                "total_tokens": result.total_tokens,
-                "message": f"Processed {len(result.chunks)} chunks. Use create_lexical_graph with chunks_file={output_path}"
-            }
-            
-            return json.dumps(summary, indent=2)
-            
-        except FileNotFoundError as e:
-            raise ToolError(f"PDF file not found: {pdf_path}")
-        except Exception as e:
-            logger.error("Failed to process PDF", error=str(e))
-            raise ToolError(f"Failed to process PDF: {e}")
-    
-    # ========================================
-    # TOOL 2: Create Lexical Graph
-    # ========================================
-    
+    """Create the lexical graph v2 MCP server."""
+
+    mcp = FastMCP("mcp-neo4j-lexical-graph-v2")
+
+    # Use provided or create defaults
+    _job_manager = job_manager or JobManager()
+    _process_pool = process_pool or ProcessPoolExecutor(max_workers=2)
+
+    # ===========================================================
+    # TOOL 1: create_lexical_graph (always async / background)
+    # ===========================================================
+
     @mcp.tool(
         name="create_lexical_graph",
         annotations=ToolAnnotations(
             title="Create Lexical Graph",
             readOnlyHint=False,
             destructiveHint=False,
-            idempotentHint=True,
+            idempotentHint=False,
             openWorldHint=False,
         ),
     )
     async def create_lexical_graph(
-        chunks_file: str = Field(..., description="Path to the chunks JSON file from process_pdf_to_chunks"),
-        document_name: str = Field(..., description="Human-readable document name")
+        path: str = Field(..., description="Path to a PDF file or a folder of PDFs"),
+        output_dir: str = Field(..., description="Directory for logs and manifests"),
+        document_id: Optional[str] = Field(
+            None, description="Custom sourceId (defaults to filename). Ignored for folders."
+        ),
+        parse_mode: str = Field(
+            "pymupdf", description="Parse mode: 'pymupdf', 'docling', or 'page_image'"
+        ),
+        store_page_images: bool = Field(
+            False, description="Render and store page images on Page nodes"
+        ),
+        dpi: int = Field(150, description="DPI for page image rendering"),
+        metadata_json: Optional[str] = Field(
+            None, description="JSON string of extra Document properties"
+        ),
+        skip_furniture: bool = Field(
+            True, description="Skip headers/footers (docling mode)"
+        ),
+        extract_sections: bool = Field(
+            True, description="Extract section hierarchy (docling mode)"
+        ),
+        extract_toc: bool = Field(
+            True, description="Extract TOC entries (docling mode)"
+        ),
+        chunk_size: int = Field(500, description="Target tokens per chunk (pymupdf mode)"),
+        chunk_overlap: int = Field(50, description="Token overlap between chunks (pymupdf mode)"),
+        extract_images: bool = Field(
+            True, description="Extract images as Element nodes with imageBase64 (pymupdf mode)"
+        ),
+        extract_tables: bool = Field(
+            True, description="Extract tables as Element nodes with imageBase64 + text (pymupdf mode)"
+        ),
     ) -> str:
+        """Parse PDF(s) and create the lexical graph in Neo4j.
+
+        Supports document versioning -- if a document with the same sourceId
+        already exists, a new version is created and the old one is deactivated.
+
+        **Parse modes:**
+        - pymupdf: PyMuPDF extraction with image/table detection. Creates Document + Chunk + Element nodes.
+          Set extract_images=False and extract_tables=False for text-only (Document + Chunk only).
+        - docling: Full layout analysis with sections, tables, captions. (requires docling extra)
+        - page_image: Page images + text. Creates Document + Page nodes for VLM use.
+
+        **Returns immediately** with a job_id. Use check_processing_status(job_id) to monitor.
         """
-        Create Document and Chunk nodes in Neo4j from processed chunks.
-        
-        This tool creates the lexical graph structure:
-        - Document node with metadata
-        - Chunk nodes with text content
-        - (Chunk)-[:PART_OF]->(Document) relationships
-        - (Chunk)-[:NEXT]->(Chunk) relationships for sequence
-        - Constraints on Document.id and Chunk.id
-        
-        **Note:** Embeddings and vector index are added separately with embed_chunks tool.
-        
-        **Returns:** Summary of created nodes and relationships
-        """
-        logger.info(
-            "Creating lexical graph",
-            chunks_file=chunks_file,
-            document_name=document_name
+        p = Path(path)
+        if not p.exists():
+            raise ToolError(f"Path not found: {path}")
+
+        os.makedirs(output_dir, exist_ok=True)
+        user_metadata = json.loads(metadata_json) if metadata_json else {}
+
+        # -- Pre-flight: count files and pages --
+        from .worker import count_pdf_pages
+
+        is_folder = p.is_dir()
+        if is_folder:
+            pdf_files = sorted(p.glob("*.pdf")) + sorted(p.glob("*.PDF"))
+            if not pdf_files:
+                raise ToolError(f"No PDF files found in {path}")
+        else:
+            if not p.is_file():
+                raise ToolError(f"Path is neither a file nor a directory: {path}")
+            pdf_files = [p]
+
+        files_total = len(pdf_files)
+        total_pages = 0
+        file_page_counts: list[tuple[str, int]] = []
+        for pdf in pdf_files:
+            try:
+                pc = count_pdf_pages(str(pdf))
+            except Exception:
+                pc = 0
+            file_page_counts.append((str(pdf), pc))
+            total_pages += pc
+
+        # Estimate processing time
+        rate = _TIME_PER_PAGE.get(parse_mode, 10.0)
+        estimated_seconds = total_pages * rate
+        estimated_minutes = round(estimated_seconds / 60, 1)
+
+        # Create the job
+        job = _job_manager.create_job(
+            path=str(p),
+            parse_mode=parse_mode,
+            is_folder=is_folder,
+            files_total=files_total,
+            total_pages_expected=total_pages,
         )
-        
-        try:
-            # Read chunks from file
-            with open(chunks_file, 'r', encoding='utf-8') as f:
-                chunks_data = json.load(f)
-            
-            # Extract metadata from chunks file
-            document_id = chunks_data.get("document_id")
-            source_path = chunks_data.get("source_path", "")
-            
-            if not document_id:
-                raise ToolError("chunks_file must contain document_id")
-            
-            # Handle both ChunkingResult format and direct chunk list
-            if "chunks" in chunks_data:
-                chunks_list = chunks_data["chunks"]
-                total_tokens = chunks_data.get("total_tokens", 0)
-            else:
-                chunks_list = chunks_data
-                total_tokens = sum(c.get("token_count", 0) for c in chunks_list)
-            
-            total_chunks = len(chunks_list)
-            
-            logger.info(f"Loaded {total_chunks} chunks for document {document_id}")
-            
-            # Create constraints (idempotent)
-            async with neo4j_driver.session(database=database) as session:
-                await session.run(QUERIES["create_document_constraint"])
-                await session.run(QUERIES["create_chunk_constraint"])
-                logger.debug("Constraints created/verified")
-            
-            # Create Document node
-            async with neo4j_driver.session(database=database) as session:
-                await session.run(
-                    QUERIES["create_document"],
-                    id=document_id,
-                    name=document_name,
-                    source=source_path,
-                    totalChunks=total_chunks,
-                    totalTokens=total_tokens
-                )
-                logger.debug("Document node created", document_id=document_id)
-            
-            # Create Chunk nodes in batches
-            batch_size = 100
-            chunks_created = 0
-            
-            for i in range(0, total_chunks, batch_size):
-                batch = chunks_list[i:i + batch_size]
-                
-                # Convert to Neo4j format
-                neo4j_chunks = []
-                for chunk in batch:
-                    neo4j_chunks.append({
-                        "id": chunk.get("id"),
-                        "text": chunk.get("text"),
-                        "index": chunk.get("index"),
-                        "startChar": chunk.get("start_char"),
-                        "endChar": chunk.get("end_char"),
-                        "tokenCount": chunk.get("token_count"),
-                    })
-                
-                async with neo4j_driver.session(database=database) as session:
-                    result = await session.run(
-                        QUERIES["create_chunks_batch"],
-                        chunks=neo4j_chunks,
-                        documentId=document_id
-                    )
-                    record = await result.single()
-                    chunks_created += record["created"] if record else 0
-                
-                logger.debug(f"Created chunk batch {i // batch_size + 1}")
-            
-            # Create NEXT relationships
-            async with neo4j_driver.session(database=database) as session:
-                result = await session.run(
-                    QUERIES["create_next_relationships"],
-                    documentId=document_id
-                )
-                record = await result.single()
-                next_rels = record["relationships"] if record else 0
-            
-            summary = {
-                "status": "success",
-                "document_id": document_id,
-                "document_name": document_name,
-                "chunks_created": chunks_created,
-                "next_relationships": next_rels,
-                "total_tokens": total_tokens,
-                "message": f"Created lexical graph with {chunks_created} chunks. Use embed_chunks to add embeddings."
-            }
-            
-            logger.info(
-                "Lexical graph created",
-                **summary
+
+        # Prepare common kwargs for the worker
+        parse_kwargs = {
+            "dpi": dpi,
+            "metadata": user_metadata,
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+            "extract_images": extract_images,
+            "extract_tables": extract_tables,
+            "skip_furniture": skip_furniture,
+            "extract_sections": extract_sections,
+            "extract_toc": extract_toc,
+            "store_page_images": store_page_images,
+        }
+
+        # Launch background task
+        task = asyncio.create_task(
+            _run_job(
+                job_id=job.id,
+                job_manager=_job_manager,
+                process_pool=_process_pool,
+                neo4j_driver=neo4j_driver,
+                database=database,
+                file_page_counts=file_page_counts,
+                parse_mode=parse_mode,
+                is_folder=is_folder,
+                output_dir=output_dir,
+                document_id=document_id,
+                parse_kwargs=parse_kwargs,
             )
-            
-            return json.dumps(summary, indent=2)
-            
-        except FileNotFoundError:
-            raise ToolError(f"Chunks file not found: {chunks_file}")
-        except json.JSONDecodeError as e:
-            raise ToolError(f"Invalid JSON in chunks file: {e}")
+        )
+        _job_manager.register_task(job.id, task)
+
+        # Build response
+        response: dict[str, Any] = {
+            "job_id": job.id,
+            "status": "queued",
+            "files_total": files_total,
+            "total_pages": total_pages,
+            "estimated_minutes": estimated_minutes,
+            "message": (
+                f"Job queued. Use check_processing_status('{job.id}') to monitor."
+            ),
+        }
+        if estimated_seconds > _WARNING_THRESHOLD_SECONDS:
+            response["warning"] = (
+                f"Processing {files_total} PDF(s) ({total_pages} pages) "
+                f"with {parse_mode} mode. Estimated time: ~{estimated_minutes} minutes."
+            )
+
+        return json.dumps(response, indent=2)
+
+    # ===========================================================
+    # TOOL 2: check_processing_status
+    # ===========================================================
+
+    @mcp.tool(
+        name="check_processing_status",
+        annotations=ToolAnnotations(
+            title="Check Processing Status",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    async def check_processing_status(
+        job_id: Optional[str] = Field(
+            None,
+            description="Job ID to check. If None, returns status of all jobs.",
+        ),
+    ) -> str:
+        """Check the status of background lexical graph processing jobs.
+
+        Returns progress info including elapsed time, estimated remaining time,
+        files completed/remaining, pages processed, and elements extracted.
+        """
+        if job_id:
+            job = _job_manager.get_job(job_id)
+            if not job:
+                raise ToolError(f"Job not found: {job_id}")
+            return json.dumps(job.to_status_dict(), indent=2)
+        else:
+            jobs = _job_manager.list_jobs()
+            if not jobs:
+                return json.dumps({
+                    "status": "success",
+                    "message": "No jobs found.",
+                    "jobs": [],
+                })
+            return json.dumps({
+                "status": "success",
+                "jobs": [j.to_status_dict() for j in jobs],
+            }, indent=2)
+
+    # ===========================================================
+    # TOOL 3: cancel_job
+    # ===========================================================
+
+    @mcp.tool(
+        name="cancel_job",
+        annotations=ToolAnnotations(
+            title="Cancel Job",
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    async def cancel_job_tool(
+        job_id: str = Field(..., description="Job ID to cancel"),
+        cleanup: bool = Field(
+            True,
+            description="Delete partial graph data created by the cancelled job",
+        ),
+    ) -> str:
+        """Cancel a running background processing job.
+
+        If cleanup=True, deletes any documents that were already written to Neo4j
+        by this job.
+        """
+        job = _job_manager.get_job(job_id)
+        if not job:
+            raise ToolError(f"Job not found: {job_id}")
+
+        if job.status in (JobStatus.COMPLETE, JobStatus.FAILED, JobStatus.CANCELLED):
+            return json.dumps({
+                "status": "already_finished",
+                "job_status": job.status.value,
+                "message": f"Job {job_id} is already {job.status.value}.",
+            })
+
+        cancelled = _job_manager.cancel_job(job_id)
+
+        result: dict[str, Any] = {
+            "status": "cancelled" if cancelled else "cancel_failed",
+            "job_id": job_id,
+        }
+
+        if cancelled and cleanup and job.documents_created:
+            cleaned = 0
+            for doc_info in job.documents_created:
+                doc_id = doc_info.get("document_id")
+                if doc_id:
+                    try:
+                        await delete_document_cascade(neo4j_driver, database, doc_id)
+                        cleaned += 1
+                    except Exception as e:
+                        logger.warning(f"Cleanup failed for {doc_id}: {e}")
+            result["documents_cleaned"] = cleaned
+
+        result["message"] = f"Job {job_id} cancelled."
+        return json.dumps(result, indent=2)
+
+    # ===========================================================
+    # TOOL 4 (was 2): chunk_lexical_graph
+    # ===========================================================
+
+    @mcp.tool(
+        name="chunk_lexical_graph",
+        annotations=ToolAnnotations(
+            title="Chunk Lexical Graph",
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+    )
+    async def chunk_lexical_graph(
+        document_id: Optional[str] = Field(
+            None,
+            description="Document version id to chunk. If None, chunks all active documents without chunks.",
+        ),
+        strategy: str = Field(
+            "token_window",
+            description="Chunking strategy: 'token_window', 'structured', 'by_section', 'by_page'",
+        ),
+        chunk_size: int = Field(500, description="Target tokens per chunk"),
+        chunk_overlap: int = Field(50, description="Token overlap (token_window only)"),
+        include_tables_as_chunks: bool = Field(
+            True, description="Create separate chunks for table elements"
+        ),
+        include_images_as_chunks: bool = Field(
+            True, description="Create separate chunks for image/chart elements"
+        ),
+        clear_existing_chunks: bool = Field(
+            False,
+            description="If True, delete ALL existing chunk sets. If False, keep as inactive.",
+        ),
+        prepend_section_heading: bool = Field(
+            True, description="Add section title to chunk text"
+        ),
+    ) -> str:
+        """Create Chunk nodes from Elements in the Neo4j graph.
+
+        Reads Elements and Sections from Neo4j (not from any external file).
+        Supports chunk versioning: multiple chunk sets can coexist.
+
+        **Strategies:**
+        - token_window: Simple sliding window. No structure awareness.
+        - structured: Section + token aware, element boundaries.
+        - by_section: One chunk per section (falls back to by_page if no sections).
+        - by_page: One chunk per page.
+        """
+        try:
+            # Determine which documents to chunk
+            doc_ids: list[str] = []
+            if document_id:
+                doc = await get_document(neo4j_driver, database, document_id)
+                if not doc:
+                    raise ToolError(f"Document not found: {document_id}")
+                if doc.get("parseMode") in ("pymupdf", "text_only"):
+                    return json.dumps({
+                        "status": "success",
+                        "message": (
+                            f"Document '{document_id}' was created in pymupdf mode. "
+                            "Chunks are created automatically during graph creation. "
+                            "Use embed_chunks to add vector embeddings."
+                        ),
+                    })
+                if doc.get("parseMode") == "page_image":
+                    return json.dumps({
+                        "status": "success",
+                        "message": (
+                            f"Document '{document_id}' was created in page_image mode. "
+                            "Page-image documents have no Elements to chunk. "
+                            "Use the entity MCP server with VLM for extraction."
+                        ),
+                    })
+                doc_ids = [document_id]
+            else:
+                all_docs = await list_all_documents(neo4j_driver, database)
+                doc_ids = [
+                    d["id"]
+                    for d in all_docs
+                    if d.get("active")
+                    and d.get("totalChunkCount", 0) == 0
+                    and d.get("parseMode") not in ("pymupdf", "text_only", "page_image")
+                ]
+                if not doc_ids:
+                    return json.dumps(
+                        {"status": "success", "message": "No documents need chunking."}
+                    )
+
+            all_results = []
+            for did in doc_ids:
+                result = await _chunk_single_document(
+                    neo4j_driver,
+                    database,
+                    document_id=did,
+                    strategy=strategy,
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,
+                    include_tables_as_chunks=include_tables_as_chunks,
+                    include_images_as_chunks=include_images_as_chunks,
+                    clear_existing_chunks=clear_existing_chunks,
+                    prepend_section_heading=prepend_section_heading,
+                )
+                all_results.append(result)
+
+            return json.dumps(
+                {"status": "success", "results": all_results}, indent=2
+            )
+
+        except ToolError:
+            raise
         except Exception as e:
-            logger.error("Failed to create lexical graph", error=str(e))
-            raise ToolError(f"Failed to create lexical graph: {e}")
-    
-    # ========================================
-    # TOOL 3: Embed Chunks
-    # ========================================
-    
+            logger.error("Chunking failed", error=str(e))
+            raise ToolError(f"Chunking failed: {e}")
+
+    # ===========================================================
+    # TOOL 3: embed_chunks
+    # ===========================================================
+
     @mcp.tool(
         name="embed_chunks",
         annotations=ToolAnnotations(
@@ -382,535 +499,1679 @@ def create_mcp_server(
         ),
     )
     async def embed_chunks(
-        document_id: Optional[str] = Field(None, description="Document ID to embed chunks for. If not provided, embeds all chunks without embeddings."),
-        parallel: int = Field(default=10, description="Maximum concurrent embedding batches"),
-        model: str = Field(default=embedding_model, description="Embedding model to use (via LiteLLM)"),
-        node_label: str = Field(default="Chunk", description="Label of nodes to embed (e.g., 'Chunk', 'Page')"),
-        id_property: Optional[str] = Field(default=None, description="Property name for node ID (e.g., 'id', 'chunk_id'). If not provided, uses elementId() for universal compatibility."),
-        text_property: str = Field(default="text", description="Property name for text content to embed"),
-        create_fulltext_index: bool = Field(default=True, description="Create a fulltext index on the text property for keyword search")
+        document_id: Optional[str] = Field(
+            None, description="Document ID to embed chunks for. None = all active chunks without embeddings."
+        ),
+        parallel: int = Field(10, description="Max concurrent embedding batches"),
+        model: str = Field(
+            default=embedding_model, description="Embedding model (via LiteLLM)"
+        ),
+        create_fulltext_index: bool = Field(
+            True, description="Create fulltext index on chunk text"
+        ),
     ) -> str:
+        """Add embeddings to active Chunk nodes that don't have them yet.
+
+        Composes the embedding input per mode:
+        - Text chunks: documentName + sectionContext + text
+        - Visual nodes (Image/Table/Page) with textDescription: documentName + sectionContext + textDescription
+        - Visual nodes without textDescription: skipped
+
+        Uses native VECTOR type and creates a vector index with documentName
+        prefilter for efficient filtered search.
         """
-        Add embeddings to nodes in Neo4j.
-        
-        This tool generates embeddings for nodes that don't have them yet
-        and stores them efficiently using db.create.setNodeVectorProperty.
-        
-        Configure node_label, id_property, and text_property to work with any schema:
-        - Default: Chunk nodes with 'id' and 'text' properties
-        - Example: node_label="Chunk", id_property="chunk_id", text_property="text"
-        
-        If document_id is provided, only embeds chunks for that document.
-        Otherwise, embeds all matching nodes without embeddings.
-        
-        Optionally creates a fulltext index on the text property for keyword search.
-        
-        **Progress:** Reports progress during embedding generation.
-        
-        **Returns:** Summary of embedded nodes
-        """
-        # Determine ID selection strategy
-        use_element_id = id_property is None
-        id_select = "elementId(c)" if use_element_id else f"c.{id_property}"
-        
-        # Embedding property name follows pattern: {text_property}_embedding
-        embedding_property = f"{text_property}_embedding"
-        
-        logger.info(
-            "Starting chunk embedding",
-            document_id=document_id,
-            model=model,
-            parallel=parallel,
-            node_label=node_label,
-            id_property=id_property or "elementId()",
-            text_property=text_property,
-            embedding_property=embedding_property
-        )
-        
         try:
-            # Build dynamic query based on parameters
+            # Mode-aware query: compose embedding input from the right fields.
+            # Visual nodes without textDescription are excluded (contentToEmbed = null).
+            _embed_select = """
+                WITH c,
+                  CASE
+                    WHEN c.textDescription IS NOT NULL THEN c.textDescription
+                    WHEN c:Image OR c:Table OR c:Page THEN null
+                    ELSE c.text
+                  END AS contentToEmbed
+                WHERE contentToEmbed IS NOT NULL
+                RETURN c.id AS id,
+                  trim(
+                    coalesce(c.documentName, '') + ' '
+                    + coalesce(c.sectionContext, '') + ' '
+                    + contentToEmbed
+                  ) AS text,
+                  c.documentName AS documentName
+            """
+
             if document_id:
                 query = f"""
-                    MATCH (c:{node_label})-[:PART_OF]->(d:Document {{id: $documentId}})
-                    WHERE c.{embedding_property} IS NULL AND c.{text_property} IS NOT NULL
-                    RETURN {id_select} as id, c.{text_property} as text
-                    ORDER BY c.index
+                    MATCH (c:Chunk)
+                    WHERE c.text_embedding IS NULL
+                      AND c.id STARTS WITH $docIdPrefix
+                    {_embed_select}
                 """
+                params: dict[str, Any] = {"docIdPrefix": document_id + "_"}
             else:
                 query = f"""
-                    MATCH (c:{node_label})
-                    WHERE c.{embedding_property} IS NULL AND c.{text_property} IS NOT NULL
-                    RETURN {id_select} as id, c.{text_property} as text
+                    MATCH (c:Chunk)
+                    WHERE c.text_embedding IS NULL
+                      AND coalesce(c.active, true) = true
+                    {_embed_select}
                 """
-            
-            # Get nodes without embeddings
+                params = {}
+
             async with neo4j_driver.session(database=database) as session:
-                if document_id:
-                    result = await session.run(query, documentId=document_id)
-                else:
-                    result = await session.run(query)
-                
+                result = await session.run(query, **params)
                 records = await result.data()
-            
+
             if not records:
-                return json.dumps({
-                    "status": "success",
-                    "message": "No chunks need embedding",
-                    "embedded": 0
-                })
-            
-            total_chunks = len(records)
-            logger.info(f"Found {total_chunks} chunks to embed")
-            
-            # Create chunk objects for embedding
-            chunks = [
-                Chunk(
-                    id=r["id"],
-                    text=r["text"],
-                    index=0,  # Not used for embedding
-                    start_char=0,
-                    end_char=0,
-                    token_count=0
-                )
-                for r in records
-            ]
-            
-            # Progress tracking
-            progress_messages = []
-            
-            def on_progress(update: ProgressUpdate):
-                progress_messages.append(update.message)
-                logger.info(update.message)
-            
-            # Generate embeddings
+                return json.dumps({"status": "success", "message": "No chunks need embedding.", "embedded": 0})
+
+            logger.info(f"Embedding {len(records)} chunks")
+
             embedder = ChunkEmbedder(model=model)
-            embedded_chunks = await embedder.embed_chunks(
-                chunks,
-                parallel=parallel,
-                progress_callback=on_progress
-            )
-            
-            # Prepare embeddings for Neo4j
-            embeddings_data = [
-                {"id": c.id, "embedding": c.embedding}
-                for c in embedded_chunks
-                if c.embedding is not None
-            ]
-            
-            # Write embeddings to Neo4j in batches
-            # Build dynamic update query based on ID strategy
-            if use_element_id:
-                update_query = f"""
-                    UNWIND $embeddings AS item
-                    MATCH (c:{node_label}) WHERE elementId(c) = item.id
-                    CALL db.create.setNodeVectorProperty(c, '{embedding_property}', item.embedding)
-                    RETURN count(c) as updated
-                """
-            else:
-                update_query = f"""
-                    UNWIND $embeddings AS item
-                    MATCH (c:{node_label} {{{id_property}: item.id}})
-                    CALL db.create.setNodeVectorProperty(c, '{embedding_property}', item.embedding)
-                    RETURN count(c) as updated
-                """
-            
-            batch_size = 100
+            pairs = [(r["id"], r["text"]) for r in records]
+            embedded = await embedder.embed_many(pairs, parallel=parallel)
+
+            # Write embeddings using native VECTOR type
             total_updated = 0
-            
-            for i in range(0, len(embeddings_data), batch_size):
-                batch = embeddings_data[i:i + batch_size]
-                
+            dims = len(embedded[0][1]) if embedded else 0
+            batch_size = 100
+            for i in range(0, len(embedded), batch_size):
+                batch = [{"id": eid, "embedding": emb} for eid, emb in embedded[i : i + batch_size]]
                 async with neo4j_driver.session(database=database) as session:
-                    result = await session.run(update_query, embeddings=batch)
+                    result = await session.run(
+                        """
+                        CYPHER 25
+                        UNWIND $embeddings AS item
+                        MATCH (c:Chunk {id: item.id})
+                        SET c.text_embedding = vector(item.embedding, $dims, FLOAT32)
+                        RETURN count(c) AS updated
+                        """,
+                        embeddings=batch,
+                        dims=dims,
+                    )
                     record = await result.single()
                     total_updated += record["updated"] if record else 0
-                
-                logger.debug(f"Updated embedding batch {i // batch_size + 1}")
-            
-            # Create vector index if embeddings were added
-            # Get dimensions from first embedding
-            vector_index_created = False
-            fulltext_index_created = False
-            
-            if embeddings_data:
-                dimensions = len(embeddings_data[0]["embedding"])
-                vector_index_name = f"{node_label.lower()}_{text_property}_embedding"
+
+            # Create vector index with documentName prefilter (Cypher 25)
+            if dims > 0:
                 try:
-                    index_query = f"""
-                        CREATE VECTOR INDEX {vector_index_name} IF NOT EXISTS
-                        FOR (c:{node_label}) ON (c.{embedding_property})
-                        OPTIONS {{indexConfig: {{
-                            `vector.dimensions`: $dimensions,
-                            `vector.similarity_function`: 'cosine'
-                        }}}}
-                    """
                     async with neo4j_driver.session(database=database) as session:
-                        await session.run(index_query, dimensions=dimensions)
-                    vector_index_created = True
-                    logger.info(f"Vector index '{vector_index_name}' created on {node_label}.{embedding_property} with {dimensions} dimensions")
+                        await session.run(
+                            f"""
+                            CYPHER 25
+                            CREATE VECTOR INDEX chunk_text_embedding IF NOT EXISTS
+                            FOR (c:Chunk) ON c.text_embedding
+                            WITH [c.documentName]
+                            OPTIONS {{indexConfig: {{
+                                `vector.dimensions`: $dims,
+                                `vector.similarity_function`: 'cosine'
+                            }}}}
+                            """,
+                            dims=dims,
+                        )
                 except Exception as e:
-                    # Index might already exist with different config
                     logger.warning(f"Vector index note: {e}")
-            
-            # Create fulltext index if requested
+
             if create_fulltext_index:
                 try:
-                    fulltext_query = f"""
-                        CREATE FULLTEXT INDEX {node_label.lower()}_{text_property}_fulltext IF NOT EXISTS
-                        FOR (c:{node_label}) ON EACH [c.{text_property}]
-                    """
                     async with neo4j_driver.session(database=database) as session:
-                        await session.run(fulltext_query)
-                    fulltext_index_created = True
-                    logger.info(f"Fulltext index created for {node_label}.{text_property}")
+                        await session.run(
+                            "CREATE FULLTEXT INDEX chunk_text_fulltext IF NOT EXISTS "
+                            "FOR (c:Chunk) ON EACH [c.text]"
+                        )
                 except Exception as e:
                     logger.warning(f"Fulltext index note: {e}")
-            
-            summary = {
-                "status": "success",
-                "document_id": document_id,
-                "node_label": node_label,
-                "id_property": id_property,
-                "text_property": text_property,
-                "embedding_property": embedding_property,
-                "model": model,
-                "nodes_processed": total_chunks,
-                "nodes_embedded": total_updated,
-                "vector_index_created": vector_index_created,
-                "fulltext_index_created": fulltext_index_created,
-                "message": f"Successfully embedded {total_updated} {node_label} nodes"
-            }
-            
-            logger.info("Embedding completed", **summary)
-            
-            return json.dumps(summary, indent=2)
-            
+
+            return json.dumps(
+                {
+                    "status": "success",
+                    "model": model,
+                    "embedded": total_updated,
+                    "dimensions": dims,
+                    "message": f"Embedded {total_updated} chunks (VECTOR FLOAT32, {dims}d). "
+                               f"Vector index with documentName prefilter created.",
+                },
+                indent=2,
+            )
+
         except Exception as e:
-            logger.error("Failed to embed chunks", error=str(e))
-            raise ToolError(f"Failed to embed chunks: {e}")
-    
-    # ========================================
-    # TOOL 4: Create Lexical Graph from Folder
-    # ========================================
-    
+            logger.error("Embedding failed", error=str(e))
+            raise ToolError(f"Embedding failed: {e}")
+
+    # ===========================================================
+    # TOOL 4: verify_lexical_graph
+    # ===========================================================
+
     @mcp.tool(
-        name="create_lexical_graph_from_folder",
+        name="verify_lexical_graph",
         annotations=ToolAnnotations(
-            title="Create Lexical Graph from Folder",
-            readOnlyHint=False,
+            title="Verify Lexical Graph",
+            readOnlyHint=True,
             destructiveHint=False,
-            idempotentHint=False,
+            idempotentHint=True,
             openWorldHint=False,
         ),
     )
-    async def create_lexical_graph_from_folder(
-        folder_path: str = Field(..., description="Path to folder containing PDF files"),
-        output_dir: str = Field(..., description="Directory to save manifest and optionally chunk files"),
-        metadata_csv: Optional[str] = Field(None, description="Optional: Path to CSV with document metadata"),
-        filename_column: str = Field(default="filename", description="Column name in CSV for filename"),
-        id_strategy: str = Field(default="filename", description="How to generate document IDs: 'filename', 'csv_column', or 'hash'"),
-        id_column: Optional[str] = Field(None, description="If id_strategy='csv_column', which column to use for document ID"),
-        chunk_size: int = Field(default=default_chunk_size, description="Target chunk size in tokens"),
-        chunk_overlap: int = Field(default=default_chunk_overlap, description="Overlap between chunks in tokens"),
-        parallel: int = Field(default=5, description="Number of PDFs to process in parallel"),
-        skip_existing: bool = Field(default=False, description="Skip documents that already exist in DB instead of erroring"),
-        save_chunks_to_disk: bool = Field(default=False, description="Save chunk JSON files to disk for debugging"),
+    async def verify_lexical_graph(
+        document_id: str = Field(..., description="Document version id to verify"),
+        output_dir: str = Field(..., description="Directory to write reports"),
     ) -> str:
+        """Run structural checks and content reconstruction on a document's graph.
+
+        Checks: orphan nodes, broken NEXT chains, statistics, and
+        reconstructs the document as Markdown for visual comparison.
+
+        Default reconstruction uses elements (reading order).
+        For pymupdf mode, chunks are always used (no separate elements).
         """
-        Process a folder of PDFs and create lexical graph in Neo4j.
-        
-        This tool:
-        - Scans folder for PDF files
-        - Optionally reads metadata from CSV
-        - Processes PDFs in parallel
-        - Creates Document and Chunk nodes in Neo4j
-        - Returns summary with path to detailed manifest
-        
-        **ID Strategy:**
-        - 'filename': Use PDF filename (without extension) as document ID
-        - 'csv_column': Use a column from metadata CSV as document ID
-        - 'hash': Generate SHA256 hash from file content
-        
-        **Metadata CSV:** If provided, columns become Document node properties.
-        PDFs not in CSV are processed with a warning. CSV entries without matching PDF are skipped with warning.
-        
-        **Returns:** JSON summary with path to manifest file containing details
-        """
-        logger.info(
-            "Creating lexical graph from folder",
-            folder_path=folder_path,
-            metadata_csv=metadata_csv,
-            id_strategy=id_strategy,
-            parallel=parallel
-        )
-        
-        folder = Path(folder_path)
-        output = Path(output_dir)
-        output.mkdir(parents=True, exist_ok=True)
-        
-        if not folder.exists() or not folder.is_dir():
-            raise ToolError(f"Folder not found: {folder_path}")
-        
-        # Find all PDF files
-        pdf_files = list(folder.glob("*.pdf")) + list(folder.glob("*.PDF"))
-        if not pdf_files:
-            raise ToolError(f"No PDF files found in {folder_path}")
-        
-        logger.info(f"Found {len(pdf_files)} PDF files")
-        
-        # Load metadata CSV if provided
-        metadata: Dict[str, Dict[str, Any]] = {}
-        csv_files_not_found: List[str] = []
-        
-        if metadata_csv:
-            csv_path = Path(metadata_csv)
-            if not csv_path.exists():
-                raise ToolError(f"Metadata CSV not found: {metadata_csv}")
-            
-            with open(csv_path, 'r', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                if filename_column not in reader.fieldnames:
-                    raise ToolError(f"Column '{filename_column}' not found in CSV. Available: {reader.fieldnames}")
-                
-                for row in reader:
-                    filename = row[filename_column]
-                    metadata[filename] = {k: v for k, v in row.items() if k != filename_column}
-            
-            logger.info(f"Loaded metadata for {len(metadata)} files from CSV")
-            
-            # Check for CSV entries without matching PDFs
-            pdf_names = {p.name for p in pdf_files}
-            for csv_filename in metadata.keys():
-                if csv_filename not in pdf_names:
-                    csv_files_not_found.append(csv_filename)
-        
-        # Create constraints (idempotent)
-        async with neo4j_driver.session(database=database) as session:
-            await session.run(QUERIES["create_document_constraint"])
-            await session.run(QUERIES["create_chunk_constraint"])
-        
-        # Check which documents already exist
-        existing_doc_ids = set()
-        async with neo4j_driver.session(database=database) as session:
-            result = await session.run("MATCH (d:Document) RETURN d.id as id")
-            records = await result.data()
-            existing_doc_ids = {r["id"] for r in records}
-        
-        # Prepare processing tasks
-        results: List[Dict[str, Any]] = []
-        warnings: List[str] = []
-        pdfs_not_in_csv: List[str] = []
-        
-        # Add warnings for CSV files not found
-        for csv_file in csv_files_not_found:
-            warnings.append(f"CSV entry '{csv_file}' has no matching PDF in folder - skipped")
-        
-        # Helper to generate document ID
-        def get_document_id(pdf_path: Path) -> str:
-            if id_strategy == "filename":
-                return pdf_path.stem
-            elif id_strategy == "hash":
-                with open(pdf_path, 'rb') as f:
-                    return hashlib.sha256(f.read()).hexdigest()[:16]
-            elif id_strategy == "csv_column":
-                if not id_column:
-                    raise ToolError("id_column required when id_strategy='csv_column'")
-                file_meta = metadata.get(pdf_path.name, {})
-                if id_column not in file_meta:
-                    raise ToolError(f"Column '{id_column}' not found in metadata for {pdf_path.name}")
-                return str(file_meta[id_column])
-            else:
-                raise ToolError(f"Unknown id_strategy: {id_strategy}")
-        
-        # Helper to process a single PDF
-        async def process_single_pdf(pdf_path: Path) -> Dict[str, Any]:
-            doc_id = get_document_id(pdf_path)
-            file_metadata = metadata.get(pdf_path.name, {})
-            
-            # Track if PDF is not in CSV
-            if metadata_csv and pdf_path.name not in metadata:
-                pdfs_not_in_csv.append(pdf_path.name)
-            
-            # Check if document already exists
-            if doc_id in existing_doc_ids:
-                if skip_existing:
-                    return {
-                        "status": "skipped",
-                        "document_id": doc_id,
-                        "filename": pdf_path.name,
-                        "reason": "Document already exists"
-                    }
-                else:
-                    return {
-                        "status": "error",
-                        "document_id": doc_id,
-                        "filename": pdf_path.name,
-                        "error": f"Document '{doc_id}' already exists in database"
-                    }
-            
-            try:
-                # Process PDF to chunks
-                chunker = PDFChunker(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-                chunk_result = chunker.process_pdf(str(pdf_path), doc_id)
-                
-                # Optionally save chunks to disk
-                if save_chunks_to_disk:
-                    chunks_file = output / f"{doc_id}_chunks.json"
-                    with open(chunks_file, 'w', encoding='utf-8') as f:
-                        f.write(chunk_result.to_json())
-                
-                # Create Document node with metadata
-                doc_name = file_metadata.get("title", pdf_path.stem)
-                
-                async with neo4j_driver.session(database=database) as session:
-                    # Build dynamic SET clause for metadata
-                    set_clauses = ["d.name = $name", "d.source = $source", 
-                                   "d.totalChunks = $totalChunks", "d.totalTokens = $totalTokens"]
-                    params = {
-                        "id": doc_id,
-                        "name": doc_name,
-                        "source": str(pdf_path),
-                        "totalChunks": len(chunk_result.chunks),
-                        "totalTokens": chunk_result.total_tokens
-                    }
-                    
-                    # Add metadata properties
-                    for key, value in file_metadata.items():
-                        safe_key = key.replace(" ", "_").replace("-", "_")
-                        set_clauses.append(f"d.{safe_key} = ${safe_key}")
-                        params[safe_key] = value
-                    
-                    query = f"""
-                        MERGE (d:Document {{id: $id}})
-                        SET {', '.join(set_clauses)}
-                        RETURN d
-                    """
-                    await session.run(query, **params)
-                
-                # Create Chunk nodes in batches
-                chunks_created = 0
-                batch_size = 100
-                
-                for i in range(0, len(chunk_result.chunks), batch_size):
-                    batch = chunk_result.chunks[i:i + batch_size]
-                    neo4j_chunks = [
-                        {
-                            "id": c.id,
-                            "text": c.text,
-                            "index": c.index,
-                            "startChar": c.start_char,
-                            "endChar": c.end_char,
-                            "tokenCount": c.token_count,
-                        }
-                        for c in batch
-                    ]
-                    
-                    async with neo4j_driver.session(database=database) as session:
-                        result = await session.run(
-                            QUERIES["create_chunks_batch"],
-                            chunks=neo4j_chunks,
-                            documentId=doc_id
-                        )
-                        record = await result.single()
-                        chunks_created += record["created"] if record else 0
-                
-                # Create NEXT relationships
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+            doc = await get_document(neo4j_driver, database, document_id)
+            if not doc:
+                raise ToolError(f"Document not found: {document_id}")
+
+            issues: list[str] = []
+            stats: dict[str, Any] = {}
+            parse_mode = doc.get("parseMode", "unknown")
+
+            # --- Statistics ---
+            pages = await get_pages_for_document(neo4j_driver, database, document_id)
+            sections = await get_sections_for_document(neo4j_driver, database, document_id)
+
+            # Elements: use page-based query for docling, direct query for pymupdf
+            if parse_mode in ("pymupdf", "text_only"):
                 async with neo4j_driver.session(database=database) as session:
                     result = await session.run(
-                        QUERIES["create_next_relationships"],
-                        documentId=doc_id
+                        """
+                        MATCH (d:Document {id: $docId})-[:HAS_ELEMENT]->(e)
+                        WITH e, toInteger(split(e.id, '_fig_')[-1]) AS figIdx,
+                             toInteger(split(e.id, '_tbl_')[-1]) AS tblIdx
+                        RETURN e.id AS id, e.type AS type, e.text AS text,
+                               e.pageNumber AS pageNumber, e.level AS level
+                        ORDER BY e.pageNumber, coalesce(figIdx, 0) + coalesce(tblIdx, 0)
+                        """,
+                        docId=document_id,
                     )
-                    record = await result.single()
-                    next_rels = record["relationships"] if record else 0
-                
-                return {
+                    elements = await result.data()
+            else:
+                elements = await get_elements_for_document(neo4j_driver, database, document_id)
+
+            type_counts: dict[str, int] = {}
+            for e in elements:
+                t = e.get("type", "unknown")
+                type_counts[t] = type_counts.get(t, 0) + 1
+
+            stats = {
+                "parseMode": parse_mode,
+                "pages": len(pages),
+                "elements": len(elements),
+                "elements_by_type": type_counts,
+                "sections": len(sections),
+            }
+
+            # Check chunk stats
+            async with neo4j_driver.session(database=database) as session:
+                result = await session.run(
+                    """
+                    MATCH (c:Chunk)-[:PART_OF]->(d:Document {id: $docId})
+                    RETURN count(c) AS cnt,
+                           avg(c.tokenCount) AS avgTokens,
+                           min(c.tokenCount) AS minTokens,
+                           max(c.tokenCount) AS maxTokens,
+                           sum(CASE WHEN c.active THEN 1 ELSE 0 END) AS activeChunks
+                    """,
+                    docId=document_id,
+                )
+                chunk_rec = await result.single()
+                if chunk_rec:
+                    stats["chunks"] = chunk_rec["cnt"]
+                    stats["activeChunks"] = chunk_rec["activeChunks"]
+                    stats["avgTokensPerChunk"] = round(chunk_rec["avgTokens"] or 0, 1)
+                    stats["minTokens"] = chunk_rec["minTokens"]
+                    stats["maxTokens"] = chunk_rec["maxTokens"]
+
+            # Check HAS_ELEMENT rels from chunks (pymupdf mode)
+            if parse_mode in ("pymupdf", "text_only") and elements:
+                async with neo4j_driver.session(database=database) as session:
+                    result = await session.run(
+                        """
+                        MATCH (d:Document {id: $docId})-[:HAS_ELEMENT]->(e)
+                        WHERE NOT (:Chunk)-[:HAS_ELEMENT]->(e)
+                        RETURN count(e) AS cnt
+                        """,
+                        docId=document_id,
+                    )
+                    rec = await result.single()
+                    if rec and rec["cnt"] > 0:
+                        issues.append(
+                            f"Elements not referenced by any chunk: {rec['cnt']}"
+                        )
+
+            # --- Structural checks (docling / page_image modes) ---
+
+            if parse_mode not in ("pymupdf", "text_only"):
+                # Orphan elements (not connected to any page)
+                async with neo4j_driver.session(database=database) as session:
+                    result = await session.run(
+                        """
+                        MATCH (e:Element)
+                        WHERE e.id STARTS WITH $prefix
+                          AND NOT (:Page)-[:HAS_ELEMENT]->(e)
+                        RETURN count(e) AS cnt
+                        """,
+                        prefix=document_id,
+                    )
+                    rec = await result.single()
+                    if rec and rec["cnt"] > 0:
+                        issues.append(f"Orphan elements (no page): {rec['cnt']}")
+
+                # Broken NEXT_PAGE chain
+                if len(pages) > 1:
+                    async with neo4j_driver.session(database=database) as session:
+                        result = await session.run(
+                            """
+                            MATCH (d:Document {id: $docId})-[:HAS_PAGE]->(p:Page)
+                            WHERE NOT (p)-[:NEXT_PAGE]->() AND p.pageNumber < $maxPage
+                            RETURN count(p) AS cnt
+                            """,
+                            docId=document_id,
+                            maxPage=len(pages) - 1,
+                        )
+                        rec = await result.single()
+                        if rec and rec["cnt"] > 0:
+                            issues.append(f"Broken NEXT_PAGE chain: {rec['cnt']} gaps")
+
+            # Broken NEXT_CHUNK chain
+            if stats.get("chunks", 0) > 1:
+                async with neo4j_driver.session(database=database) as session:
+                    result = await session.run(
+                        """
+                        MATCH (c:Chunk)-[:PART_OF]->(d:Document {id: $docId})
+                        WHERE c.active = true AND NOT (c)-[:NEXT_CHUNK]->()
+                        WITH count(c) AS tailCount
+                        RETURN CASE WHEN tailCount > 1
+                               THEN tailCount - 1 ELSE 0 END AS gaps
+                        """,
+                        docId=document_id,
+                    )
+                    rec = await result.single()
+                    if rec and rec["gaps"] > 0:
+                        issues.append(f"Broken NEXT_CHUNK chain: {rec['gaps']} gaps")
+
+            # --- Content reconstruction ---
+            md_lines: list[str] = []
+            md_lines.append(f"# {doc.get('name', document_id)}\n")
+            md_lines.append(f"*Source: {doc.get('source', 'unknown')}*\n")
+            md_lines.append(f"*Parse mode: {parse_mode}*\n\n")
+
+            if parse_mode in ("pymupdf", "text_only"):
+                # Build a lookup of element images for placeholder replacement
+                import re as _re
+
+                elem_images: dict[str, tuple[str, str]] = {}  # id -> (b64, mime)
+                if elements:
+                    async with neo4j_driver.session(database=database) as session:
+                        result = await session.run(
+                            """
+                            MATCH (d:Document {id: $docId})-[:HAS_ELEMENT]->(e)
+                            WHERE e.imageBase64 IS NOT NULL
+                            RETURN e.id AS id, e.imageBase64 AS b64,
+                                   e.imageMimeType AS mime, e.type AS type
+                            """,
+                            docId=document_id,
+                        )
+                        for rec in await result.data():
+                            mime = rec.get("mime") or "image/png"
+                            elem_images[rec["id"]] = (rec["b64"], mime)
+
+                # Reconstruct from chunks (pymupdf has no pages)
+                async with neo4j_driver.session(database=database) as session:
+                    result = await session.run(
+                        """
+                        MATCH (c:Chunk)-[:PART_OF]->(d:Document {id: $docId})
+                        WHERE c.active = true
+                        RETURN c.text AS text, c.index AS idx, c.type AS type
+                        ORDER BY c.index
+                        """,
+                        docId=document_id,
+                    )
+                    chunk_records = await result.data()
+
+                placeholder_re = _re.compile(
+                    r"\[(IMAGE|TABLE):\s*([^\]]+)\]"
+                )
+
+                for cr in chunk_records:
+                    md_lines.append(f"---\n### Chunk {cr['idx']} (type: {cr['type']})\n")
+                    chunk_text = cr["text"]
+                    # Replace placeholders with embedded images
+                    def _replace_placeholder(m: _re.Match) -> str:
+                        elem_type = m.group(1)
+                        elem_id = m.group(2).strip()
+                        if elem_id in elem_images:
+                            b64, mime = elem_images[elem_id]
+                            img_md = f"![{elem_type}: {elem_id}](data:{mime};base64,{b64})"
+                            return img_md
+                        return m.group(0)
+
+                    chunk_text = placeholder_re.sub(_replace_placeholder, chunk_text)
+                    md_lines.append(f"{chunk_text}\n")
+            elif parse_mode == "page_image":
+                # Reconstruct from pages: show page image + extracted text
+                # Fetch page images from graph
+                page_images: dict[int, tuple[str, str]] = {}
+                async with neo4j_driver.session(database=database) as session:
+                    result = await session.run(
+                        """
+                        MATCH (d:Document {id: $docId})-[:HAS_PAGE]->(p:Page)
+                        WHERE p.imageBase64 IS NOT NULL
+                        RETURN p.pageNumber AS pn, p.imageBase64 AS b64,
+                               p.imageMimeType AS mime
+                        """,
+                        docId=document_id,
+                    )
+                    for rec in await result.data():
+                        mime = rec.get("mime") or "image/png"
+                        page_images[rec["pn"]] = (rec["b64"], mime)
+
+                for page in pages:
+                    pn = page["pageNumber"]
+                    md_lines.append(f"---\n## Page {pn + 1}\n")
+                    # Embed the page image
+                    if pn in page_images:
+                        b64, mime = page_images[pn]
+                        md_lines.append(
+                            f"![Page {pn + 1}](data:{mime};base64,{b64})\n"
+                        )
+                    # Show extracted text
+                    text = page.get("text", "")
+                    if text:
+                        md_lines.append(f"**Extracted text:**\n\n{text}\n")
+                    md_lines.append("")
+
+            else:
+                # Reconstruct from pages/elements (docling mode)
+                # Build element image lookup
+                elem_images_other: dict[str, tuple[str, str]] = {}
+                if elements:
+                    async with neo4j_driver.session(database=database) as session:
+                        result = await session.run(
+                            """
+                            MATCH (e:Element)
+                            WHERE e.id STARTS WITH $prefix
+                              AND e.imageBase64 IS NOT NULL
+                            RETURN e.id AS id, e.imageBase64 AS b64,
+                                   e.imageMimeType AS mime
+                            """,
+                            prefix=document_id,
+                        )
+                        for rec in await result.data():
+                            mime = rec.get("mime") or "image/png"
+                            elem_images_other[rec["id"]] = (rec["b64"], mime)
+
+                for page in pages:
+                    md_lines.append(f"---\n## Page {page['pageNumber'] + 1}\n")
+                    page_elements = [
+                        e for e in elements
+                        if e.get("pageNumber") == page["pageNumber"]
+                    ]
+                    for e in page_elements:
+                        etype = e.get("type", "paragraph")
+                        text = e.get("text", "")
+                        eid = e.get("id", "")
+                        if etype == "heading":
+                            level = e.get("level", 2)
+                            md_lines.append(f"{'#' * (level + 1)} {text}\n")
+                        elif etype == "table":
+                            md_lines.append(f"\n**[TABLE]**\n{text}\n")
+                            if eid in elem_images_other:
+                                b64, mime = elem_images_other[eid]
+                                md_lines.append(
+                                    f"![Table: {eid}](data:{mime};base64,{b64})\n"
+                                )
+                        elif etype == "image":
+                            md_lines.append(f"\n**[IMAGE]** {text}\n")
+                            if eid in elem_images_other:
+                                b64, mime = elem_images_other[eid]
+                                md_lines.append(
+                                    f"![Figure: {eid}](data:{mime};base64,{b64})\n"
+                                )
+                        elif etype == "caption":
+                            md_lines.append(f"*Caption: {text}*\n")
+                        else:
+                            md_lines.append(f"{text}\n")
+                    md_lines.append("")
+
+            reconstruction_path = os.path.join(
+                output_dir, f"{document_id}_reconstruction.md"
+            )
+            with open(reconstruction_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(md_lines))
+
+            # --- Chunk-based reconstruction (if chunks exist) ---
+            chunk_reconstruction_path: Optional[str] = None
+            if stats.get("activeChunks", 0) > 0 and parse_mode not in ("pymupdf", "text_only"):
+                # For pymupdf, the main reconstruction already uses chunks.
+                # For docling/page_image, generate a separate chunk reconstruction.
+                chunk_md = await _reconstruct_from_chunks(
+                    neo4j_driver, database, document_id, doc
+                )
+                if chunk_md:
+                    chunk_reconstruction_path = os.path.join(
+                        output_dir, f"{document_id}_chunks_reconstruction.md"
+                    )
+                    with open(chunk_reconstruction_path, "w", encoding="utf-8") as f:
+                        f.write(chunk_md)
+
+            report = {
+                "document_id": document_id,
+                "statistics": stats,
+                "issues": issues,
+                "reconstruction_file": reconstruction_path,
+                "status": "pass" if not issues else "issues_found",
+            }
+            if chunk_reconstruction_path:
+                report["chunk_reconstruction_file"] = chunk_reconstruction_path
+
+            # Write JSON report
+            report_path = os.path.join(output_dir, f"{document_id}_report.json")
+            with open(report_path, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2)
+
+            return json.dumps(report, indent=2)
+
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error("Verification failed", error=str(e))
+            raise ToolError(f"Verification failed: {e}")
+
+    # ===========================================================
+    # TOOL 5: list_documents
+    # ===========================================================
+
+    @mcp.tool(
+        name="list_documents",
+        annotations=ToolAnnotations(
+            title="List Documents",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    async def list_documents_tool() -> str:
+        """List all documents in the graph, grouped by sourceId with version info."""
+        try:
+            docs = await list_all_documents(neo4j_driver, database)
+            if not docs:
+                return json.dumps({"status": "success", "documents": [], "message": "No documents in graph."})
+
+            # Group by sourceId
+            grouped: dict[str, list[dict[str, Any]]] = {}
+            for d in docs:
+                sid = d.get("sourceId", d["id"])
+                grouped.setdefault(sid, []).append(d)
+
+            output = []
+            for sid, versions in grouped.items():
+                output.append(
+                    {
+                        "sourceId": sid,
+                        "name": versions[0].get("name"),
+                        "source": versions[0].get("source"),
+                        "versions": [
+                            {
+                                "id": v["id"],
+                                "version": v.get("version"),
+                                "active": v.get("active"),
+                                "parseMode": v.get("parseMode"),
+                                "pages": v.get("pageCount"),
+                                "elements": v.get("elementCount"),
+                                "sections": v.get("sectionCount"),
+                                "chunks": v.get("totalChunkCount"),
+                                "hasEmbeddings": v.get("hasEmbeddings"),
+                                "createdAt": v.get("createdAt"),
+                            }
+                            for v in versions
+                        ],
+                    }
+                )
+
+            return json.dumps({"status": "success", "documents": output}, indent=2)
+
+        except Exception as e:
+            logger.error("list_documents failed", error=str(e))
+            raise ToolError(f"Failed: {e}")
+
+    # ===========================================================
+    # TOOL 6: delete_document
+    # ===========================================================
+
+    @mcp.tool(
+        name="delete_document",
+        annotations=ToolAnnotations(
+            title="Delete Document",
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    async def delete_document(
+        document_id: str = Field(..., description="Document version id to delete"),
+    ) -> str:
+        """Delete a document version and ALL its children (pages, elements, sections, chunks, TOC entries)."""
+        try:
+            doc = await get_document(neo4j_driver, database, document_id)
+            if not doc:
+                raise ToolError(f"Document not found: {document_id}")
+
+            counts = await delete_document_cascade(
+                neo4j_driver, database, document_id
+            )
+
+            return json.dumps(
+                {
                     "status": "success",
-                    "document_id": doc_id,
-                    "filename": pdf_path.name,
-                    "chunks_created": chunks_created,
-                    "next_relationships": next_rels,
-                    "total_tokens": chunk_result.total_tokens,
-                    "metadata_applied": bool(file_metadata)
-                }
-                
-            except Exception as e:
-                logger.error(f"Failed to process {pdf_path.name}", error=str(e))
-                return {
-                    "status": "error",
-                    "document_id": doc_id,
-                    "filename": pdf_path.name,
-                    "error": str(e)
-                }
-        
-        # Process PDFs in parallel with semaphore
-        semaphore = asyncio.Semaphore(parallel)
-        
-        async def process_with_semaphore(pdf_path: Path) -> Dict[str, Any]:
-            async with semaphore:
-                return await process_single_pdf(pdf_path)
-        
-        # Run all tasks
-        tasks = [process_with_semaphore(pdf) for pdf in pdf_files]
-        results = await asyncio.gather(*tasks)
-        
-        # Add warnings for PDFs not in CSV
-        for pdf_name in pdfs_not_in_csv:
-            warnings.append(f"PDF '{pdf_name}' not found in metadata CSV - processed without metadata")
-        
-        # Compute summary
-        successful = [r for r in results if r["status"] == "success"]
-        skipped = [r for r in results if r["status"] == "skipped"]
-        errors = [r for r in results if r["status"] == "error"]
-        
-        total_chunks = sum(r.get("chunks_created", 0) for r in successful)
-        total_tokens = sum(r.get("total_tokens", 0) for r in successful)
-        
-        # Write manifest file
-        manifest = {
-            "timestamp": datetime.now().isoformat(),
-            "folder_path": str(folder_path),
-            "metadata_csv": metadata_csv,
-            "id_strategy": id_strategy,
-            "chunk_size": chunk_size,
-            "chunk_overlap": chunk_overlap,
-            "summary": {
-                "total_pdfs": len(pdf_files),
-                "successful": len(successful),
-                "skipped": len(skipped),
-                "errors": len(errors),
-                "total_chunks": total_chunks,
-                "total_tokens": total_tokens
-            },
-            "warnings": warnings,
-            "results": results
-        }
-        
-        manifest_path = output / "manifest.json"
-        with open(manifest_path, 'w', encoding='utf-8') as f:
-            json.dump(manifest, f, indent=2)
-        
-        # Build summary response
-        summary = {
-            "status": "success" if not errors else "partial_success" if successful else "failed",
-            "documents_processed": len(successful),
-            "documents_skipped": len(skipped),
-            "documents_failed": len(errors),
-            "total_chunks": total_chunks,
-            "total_tokens": total_tokens,
-            "manifest_file": str(manifest_path),
-            "warnings": warnings if warnings else None,
-            "errors": [{"filename": e["filename"], "error": e["error"]} for e in errors] if errors else None,
-            "message": f"Processed {len(successful)}/{len(pdf_files)} PDFs. Details in {manifest_path}"
-        }
-        
-        # Remove None values
-        summary = {k: v for k, v in summary.items() if v is not None}
-        
-        logger.info("Folder processing completed", **summary)
-        
-        return json.dumps(summary, indent=2)
-    
+                    "document_id": document_id,
+                    "deleted": counts,
+                    "message": f"Deleted document {document_id} and all children.",
+                },
+                indent=2,
+            )
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error("delete_document failed", error=str(e))
+            raise ToolError(f"Failed: {e}")
+
+    # ===========================================================
+    # TOOL 7: set_active_version
+    # ===========================================================
+
+    @mcp.tool(
+        name="set_active_version",
+        annotations=ToolAnnotations(
+            title="Set Active Version",
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    async def set_active_version(
+        document_id: str = Field(..., description="Document version to activate"),
+        chunk_set_version: Optional[int] = Field(
+            None,
+            description="If provided, activate this chunk set version for the document.",
+        ),
+    ) -> str:
+        """Activate a specific document version (deactivates others with same sourceId).
+
+        Optionally also activate a specific chunk set version.
+        """
+        try:
+            doc = await get_document(neo4j_driver, database, document_id)
+            if not doc:
+                raise ToolError(f"Document not found: {document_id}")
+
+            source_id = doc.get("sourceId", document_id)
+
+            # Deactivate all versions, then activate the target
+            await deactivate_versions(neo4j_driver, database, source_id)
+            async with neo4j_driver.session(database=database) as session:
+                await session.run(
+                    "MATCH (d:Document {id: $id}) SET d.active = true",
+                    id=document_id,
+                )
+
+            msg = f"Activated document version {document_id}."
+
+            # Optionally set chunk version
+            if chunk_set_version is not None:
+                await deactivate_chunks_for_document(
+                    neo4j_driver, database, document_id
+                )
+                async with neo4j_driver.session(database=database) as session:
+                    result = await session.run(
+                        """
+                        MATCH (c:Chunk)-[:PART_OF]->(d:Document {id: $docId})
+                        WHERE c.chunkSetVersion = $ver
+                        SET c.active = true
+                        RETURN count(c) AS cnt
+                        """,
+                        docId=document_id,
+                        ver=chunk_set_version,
+                    )
+                    rec = await result.single()
+                    cnt = rec["cnt"] if rec else 0
+                msg += f" Activated chunk set v{chunk_set_version} ({cnt} chunks)."
+
+            return json.dumps({"status": "success", "message": msg})
+
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error("set_active_version failed", error=str(e))
+            raise ToolError(f"Failed: {e}")
+
+    # ===========================================================
+    # TOOL 8: clean_inactive
+    # ===========================================================
+
+    @mcp.tool(
+        name="clean_inactive",
+        annotations=ToolAnnotations(
+            title="Clean Inactive Versions",
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    async def clean_inactive(
+        source_id: Optional[str] = Field(
+            None, description="Clean inactive document versions for this sourceId. None = all."
+        ),
+        document_id: Optional[str] = Field(
+            None, description="Clean inactive chunk sets for this document. None = all active docs."
+        ),
+    ) -> str:
+        """Delete inactive document versions and/or inactive chunk sets."""
+        try:
+            results: dict[str, Any] = {}
+
+            if document_id:
+                # Clean inactive chunks for a specific document
+                cnt = await delete_chunks_for_document(
+                    neo4j_driver, database, document_id, only_inactive=True
+                )
+                results["inactive_chunks_deleted"] = cnt
+            elif source_id:
+                # Delete inactive document versions for a sourceId
+                query = """
+                    MATCH (d:Document {sourceId: $sourceId})
+                    WHERE d.active = false
+                    RETURN d.id AS id
+                """
+                async with neo4j_driver.session(database=database) as session:
+                    result = await session.run(query, sourceId=source_id)
+                    inactive_ids = [r["id"] for r in await result.data()]
+
+                total_deleted: dict[str, int] = {}
+                for did in inactive_ids:
+                    counts = await delete_document_cascade(
+                        neo4j_driver, database, did
+                    )
+                    for k, v in counts.items():
+                        total_deleted[k] = total_deleted.get(k, 0) + v
+                results["inactive_documents_deleted"] = len(inactive_ids)
+                results["nodes_deleted"] = total_deleted
+            else:
+                # Clean all inactive across all sourceIds
+                query = """
+                    MATCH (d:Document)
+                    WHERE d.active = false
+                    RETURN d.id AS id
+                """
+                async with neo4j_driver.session(database=database) as session:
+                    result = await session.run(query)
+                    inactive_ids = [r["id"] for r in await result.data()]
+
+                total_deleted = {}
+                for did in inactive_ids:
+                    counts = await delete_document_cascade(
+                        neo4j_driver, database, did
+                    )
+                    for k, v in counts.items():
+                        total_deleted[k] = total_deleted.get(k, 0) + v
+                results["inactive_documents_deleted"] = len(inactive_ids)
+                results["nodes_deleted"] = total_deleted
+
+            return json.dumps({"status": "success", **results}, indent=2)
+
+        except Exception as e:
+            logger.error("clean_inactive failed", error=str(e))
+            raise ToolError(f"Failed: {e}")
+
+    # ===========================================================
+    # POST-PROCESSING: Assign Section Hierarchy
+    # ===========================================================
+
+    @mcp.tool(
+        name="assign_section_hierarchy",
+        annotations=ToolAnnotations(
+            title="Assign Section Hierarchy",
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+    )
+    async def assign_section_hierarchy_tool(
+        document_id: str = Field(..., description="Document version id to process"),
+        model: Optional[str] = Field(
+            None,
+            description="LLM model to use (defaults to EXTRACTION_MODEL env var)",
+        ),
+        hierarchy: Optional[str] = Field(
+            None,
+            description=(
+                'Optional: agent-provided hierarchy as JSON string, e.g. '
+                '\'[{"id": "doc_v1_sec_0", "level": 1}, {"id": "doc_v1_sec_1", "level": 2}]\'. '
+                "When provided, skips the LLM call and applies these levels directly."
+            ),
+        ),
+    ) -> str:
+        """Use LLM to assign proper heading levels to sections, rebuild HAS_SUBSECTION, and propagate heading chains to chunks.
+
+        Fixes Docling's flat level=1 sections. After running:
+        - Section.level values reflect the real document hierarchy
+        - HAS_SUBSECTION relationships link parent to child sections
+        - Active Chunk.sectionContext contains the full heading chain (e.g., "Chapter 1 > Section 1.1 > Sub 1.1.1")
+
+        Two modes:
+        - LLM mode (default): automatically infers hierarchy using the configured LLM.
+        - Agent mode: pass a hierarchy JSON to apply levels directly (no LLM call).
+          If the LLM call fails (no API key, network error), returns sections for the agent to decide.
+        """
+        try:
+            use_model = model or extraction_model
+            doc = await get_document(neo4j_driver, database, document_id)
+            if not doc:
+                raise ToolError(f"Document not found: {document_id}")
+
+            doc_name = doc.get("name", document_id)
+
+            parsed_hierarchy = None
+            if hierarchy:
+                try:
+                    parsed_hierarchy = json.loads(hierarchy)
+                except json.JSONDecodeError as e:
+                    raise ToolError(f"Invalid hierarchy JSON: {e}")
+
+            result = await _assign_hierarchy(
+                neo4j_driver, database, document_id, doc_name,
+                model=use_model, hierarchy=parsed_hierarchy,
+            )
+
+            if "error" in result:
+                raise ToolError(result["error"])
+
+            return json.dumps(result, indent=2, default=str)
+
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error("assign_section_hierarchy failed", error=str(e))
+            raise ToolError(f"Failed: {e}")
+
+    # ===========================================================
+    # POST-PROCESSING: Generate Chunk Descriptions (VLM)
+    # ===========================================================
+
+    @mcp.tool(
+        name="generate_chunk_descriptions",
+        annotations=ToolAnnotations(
+            title="Generate Chunk Descriptions",
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+    )
+    async def generate_chunk_descriptions_tool(
+        document_id: str = Field(..., description="Document version id to process"),
+        model: Optional[str] = Field(
+            None,
+            description="VLM model for description generation (defaults to EXTRACTION_MODEL env var, must support vision)",
+        ),
+        parallel: int = Field(
+            5, description="Max concurrent VLM calls"
+        ),
+    ) -> str:
+        """Generate text descriptions for image/table chunks using a Vision Language Model.
+
+        Works with both docling and pymupdf parse modes:
+        - Docling: image/table chunks have imageBase64 directly
+        - PyMuPDF: chunks link to Image/Table nodes via HAS_ELEMENT
+
+        After running:
+        - Chunk.textDescription stores the VLM description
+        - Chunk.text is NOT modified (stays as original extracted content)
+        - (PyMuPDF mode) Image/Table nodes receive the :Chunk label, documentName, active
+        - (Page-image mode) Page nodes receive the :Chunk label
+        """
+        try:
+            use_model = model or extraction_model
+            doc = await get_document(neo4j_driver, database, document_id)
+            if not doc:
+                raise ToolError(f"Document not found: {document_id}")
+
+            result = await _generate_descriptions(
+                neo4j_driver, database, document_id, model=use_model, parallel=parallel
+            )
+
+            if "error" in result:
+                raise ToolError(result["error"])
+
+            return json.dumps(result, indent=2, default=str)
+
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error("generate_chunk_descriptions failed", error=str(e))
+            raise ToolError(f"Failed: {e}")
+
     return mcp
+
+
+# ===========================================================
+# Background job runner + Neo4j writing helpers
+# ===========================================================
+
+
+def _remap_version_in_result(
+    worker_result: dict[str, Any],
+    source_id: str,
+    old_version: int,
+    new_version: int,
+) -> dict[str, Any]:
+    """Remap all IDs in a worker result from one version to another.
+
+    IDs follow the pattern: {source_id}_v{version} or contain it as a prefix.
+    This rewrites them so parsed results can be written with the correct version
+    even if the version changed between parse time and write time.
+    """
+    import json as _json
+    import copy
+
+    old_suffix = f"_v{old_version}"
+    new_suffix = f"_v{new_version}"
+
+    parse_mode = worker_result.get("parse_mode", "")
+
+    if parse_mode == "pymupdf":
+        result = copy.deepcopy(worker_result)
+        old_doc_id = f"{source_id}_v{old_version}"
+        new_doc_id = f"{source_id}_v{new_version}"
+
+        # Remap doc_id
+        if result.get("doc_id") == old_doc_id:
+            result["doc_id"] = new_doc_id
+
+        # Remap doc_props
+        if "doc_props" in result:
+            props = result["doc_props"]
+            if props.get("id") == old_doc_id:
+                props["id"] = new_doc_id
+            if "version" in props:
+                props["version"] = new_version
+
+        # Remap element records
+        for rec in result.get("element_records", []):
+            if "id" in rec and old_suffix in rec["id"]:
+                rec["id"] = rec["id"].replace(old_suffix, new_suffix, 1)
+
+        # Remap chunk records
+        for chunk in result.get("chunks", []):
+            if "id" in chunk and old_suffix in chunk["id"]:
+                chunk["id"] = chunk["id"].replace(old_suffix, new_suffix, 1)
+            # Chunk text may contain element references -- leave text as-is
+            # (element placeholders reference element IDs, remap those too)
+            for key in ("hasElementIds",):
+                if key in chunk and isinstance(chunk[key], list):
+                    chunk[key] = [
+                        eid.replace(old_suffix, new_suffix, 1) if old_suffix in eid else eid
+                        for eid in chunk[key]
+                    ]
+
+        return result
+
+    else:
+        # docling / page_image: the entire parsed_doc is a dict
+        # Serialize to JSON, do a global string replace on the version suffix, deserialize
+        raw = _json.dumps(worker_result)
+        old_id_prefix = f"{source_id}_v{old_version}"
+        new_id_prefix = f"{source_id}_v{new_version}"
+        raw = raw.replace(old_id_prefix, new_id_prefix)
+        # Also fix the version integer in the document properties
+        raw = raw.replace(
+            f'"version": {old_version}',
+            f'"version": {new_version}',
+        )
+        return _json.loads(raw)
+
+
+async def _run_job(
+    job_id: str,
+    job_manager: JobManager,
+    process_pool: ProcessPoolExecutor,
+    neo4j_driver: AsyncDriver,
+    database: str,
+    file_page_counts: list[tuple[str, int]],
+    parse_mode: str,
+    is_folder: bool,
+    output_dir: str,
+    document_id: Optional[str],
+    parse_kwargs: dict[str, Any],
+) -> None:
+    """Background task that orchestrates parse-one-write-one processing.
+
+    For each PDF:
+      1. Submit parsing to subprocess (with tentative version=1)
+      2. After parsing, determine real version atomically (right before write)
+      3. Remap IDs if version changed
+      4. Write result to Neo4j (with retry on constraint violation)
+      5. Update job progress
+    """
+    from .worker import parse_single_pdf
+
+    loop = asyncio.get_running_loop()
+    progress_queue: multiprocessing.Queue = multiprocessing.Queue()
+
+    await ensure_constraints(neo4j_driver, database)
+
+    try:
+        for file_idx, (pdf_path, page_count) in enumerate(file_page_counts):
+            # Check cancellation
+            job = job_manager.get_job(job_id)
+            if not job or job.status == JobStatus.CANCELLED:
+                logger.info("Job cancelled, stopping", job_id=job_id)
+                return
+
+            pdf_name = Path(pdf_path).name
+            source_id = document_id if (not is_folder and document_id) else Path(pdf_path).stem
+
+            # Update progress: starting this file
+            job_manager.update_progress(
+                job_id,
+                current_file=pdf_name,
+                current_file_pages=page_count,
+                current_stage="parsing",
+            )
+            job_manager.update_status(job_id, JobStatus.PARSING)
+
+            try:
+                # Parse with tentative version=1 (real version determined at write time)
+                tentative_version = 1
+
+                logger.info(
+                    "Submitting to subprocess",
+                    job_id=job_id,
+                    file=pdf_name,
+                    mode=parse_mode,
+                    tentative_version=tentative_version,
+                )
+
+                try:
+                    worker_result = await loop.run_in_executor(
+                        process_pool,
+                        _make_worker_call(
+                            pdf_path=pdf_path,
+                            source_id=source_id,
+                            version=tentative_version,
+                            parse_mode=parse_mode,
+                            progress_queue=progress_queue,
+                            **parse_kwargs,
+                        ),
+                    )
+                except BrokenProcessPool:
+                    logger.error("Process pool crashed, recreating", job_id=job_id)
+                    raise RuntimeError(
+                        f"Subprocess crashed while parsing {pdf_name}. "
+                        "This may be due to memory or a docling bug."
+                    )
+
+                # Update: writing phase -- determine real version NOW
+                job_manager.update_progress(job_id, current_stage="writing")
+                job_manager.update_status(job_id, JobStatus.WRITING)
+
+                # Atomically determine real version (right before write)
+                existing = await get_existing_versions(neo4j_driver, database, source_id)
+                real_version = 1
+                if existing:
+                    real_version = max(v["version"] for v in existing) + 1
+                    await deactivate_versions(neo4j_driver, database, source_id)
+
+                # Remap IDs if version differs from tentative
+                if real_version != tentative_version:
+                    logger.info(
+                        "Version remapped",
+                        job_id=job_id,
+                        file=pdf_name,
+                        tentative=tentative_version,
+                        real=real_version,
+                    )
+                    worker_result = _remap_version_in_result(
+                        worker_result, source_id, tentative_version, real_version
+                    )
+
+                version = real_version
+
+                # Write to Neo4j with retry on constraint violation
+                max_retries = 2
+                for attempt in range(max_retries + 1):
+                    try:
+                        doc_summary = await _write_worker_result_to_neo4j(
+                            neo4j_driver, database, worker_result, source_id, version
+                        )
+                        break
+                    except Exception as write_err:
+                        err_str = str(write_err)
+                        if "ConstraintValidationFailed" in err_str and attempt < max_retries:
+                            # Another job created this version concurrently -- bump and retry
+                            version += 1
+                            logger.warning(
+                                "Constraint conflict, retrying with higher version",
+                                job_id=job_id,
+                                file=pdf_name,
+                                new_version=version,
+                                attempt=attempt + 1,
+                            )
+                            worker_result = _remap_version_in_result(
+                                worker_result, source_id, version - 1, version
+                            )
+                        else:
+                            raise
+
+                # Record successful document
+                job_manager.update_progress(
+                    job_id,
+                    files_completed=job_manager.get_job(job_id).files_completed + 1,
+                    total_pages_processed=(
+                        job_manager.get_job(job_id).total_pages_processed + page_count
+                    ),
+                    total_elements_extracted=(
+                        job_manager.get_job(job_id).total_elements_extracted
+                        + doc_summary.get("elements", 0)
+                    ),
+                )
+                job_manager.get_job(job_id).documents_created.append(doc_summary)
+
+                logger.info(
+                    "Document written to Neo4j",
+                    job_id=job_id,
+                    document_id=doc_summary.get("document_id"),
+                )
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(
+                    f"Failed to process {pdf_name}",
+                    job_id=job_id,
+                    error=str(e),
+                )
+                job_manager.update_progress(
+                    job_id,
+                    files_failed=job_manager.get_job(job_id).files_failed + 1,
+                )
+                job_manager.get_job(job_id).errors.append({
+                    "filename": pdf_name,
+                    "error": str(e),
+                })
+                # Continue with next file (don't stop the batch)
+                if not is_folder:
+                    raise
+
+        # All files done -- write manifest for folders
+        job = job_manager.get_job(job_id)
+        if is_folder and job:
+            os.makedirs(output_dir, exist_ok=True)
+            manifest = {
+                "timestamp": datetime.now().isoformat(),
+                "folder_path": job.path,
+                "parse_mode": parse_mode,
+                "total_pdfs": job.files_total,
+                "successful": job.files_completed,
+                "errors": job.files_failed,
+                "documents_created": job.documents_created,
+                "error_details": job.errors,
+            }
+            manifest_path = os.path.join(output_dir, "manifest.json")
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2)
+            job_manager.update_progress(job_id, result={"manifest_file": manifest_path})
+
+        # Mark complete
+        job_manager.update_status(job_id, JobStatus.COMPLETE)
+        logger.info("Job complete", job_id=job_id)
+
+    except asyncio.CancelledError:
+        logger.info("Job task cancelled", job_id=job_id)
+        job_manager.update_status(job_id, JobStatus.CANCELLED)
+    except Exception as e:
+        logger.error("Job failed", job_id=job_id, error=str(e))
+        job_manager.update_status(job_id, JobStatus.FAILED, error=str(e))
+    finally:
+        # Drain the progress queue
+        try:
+            while not progress_queue.empty():
+                progress_queue.get_nowait()
+        except Exception:
+            pass
+
+
+def _make_worker_call(
+    pdf_path: str,
+    source_id: str,
+    version: int,
+    parse_mode: str,
+    progress_queue: Optional[multiprocessing.Queue] = None,
+    **kwargs: Any,
+) -> Any:
+    """Create a callable for run_in_executor.
+
+    ProcessPoolExecutor requires a callable (no args), so we wrap
+    parse_single_pdf with functools.partial.
+    """
+    import functools
+    from .worker import parse_single_pdf
+
+    return functools.partial(
+        parse_single_pdf,
+        pdf_path=pdf_path,
+        source_id=source_id,
+        version=version,
+        parse_mode=parse_mode,
+        progress_queue=None,  # Queue can't be pickled across processes easily
+        **kwargs,
+    )
+
+
+async def _write_worker_result_to_neo4j(
+    driver: AsyncDriver,
+    database: str,
+    worker_result: dict[str, Any],
+    source_id: str,
+    version: int,
+) -> dict[str, Any]:
+    """Write the result from a subprocess worker to Neo4j.
+
+    Returns a summary dict with document info.
+    """
+    parse_mode = worker_result["parse_mode"]
+
+    if parse_mode == "pymupdf":
+        return await _write_pymupdf_result(driver, database, worker_result)
+    else:
+        # docling or page_image -- reconstruct ParsedDocument from dict
+        parsed = ParsedDocument.model_validate(worker_result["parsed_doc"])
+        summary = await write_parsed_document(driver, database, parsed)
+        return summary
+
+
+async def _write_pymupdf_result(
+    driver: AsyncDriver,
+    database: str,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Write pymupdf worker output to Neo4j (Document + Elements + Chunks)."""
+
+    doc_id = result["doc_id"]
+    doc_props = result["doc_props"]
+    element_records = result["element_records"]
+    chunks = result["chunks"]
+
+    # Create Document node
+    async with driver.session(database=database) as session:
+        await session.run("CREATE (d:Document) SET d = $props", props=doc_props)
+    logger.info("Document node created", doc_id=doc_id, mode="pymupdf")
+
+    # Create Image/Table nodes (pymupdf visual assets get dedicated labels)
+    if element_records:
+        batch_size = 50
+        for i in range(0, len(element_records), batch_size):
+            batch = element_records[i : i + batch_size]
+            async with driver.session(database=database) as session:
+                await session.run(
+                    """
+                    UNWIND $records AS rec
+                    CREATE (e)
+                    SET e.id = rec.id,
+                        e.type = rec.type,
+                        e.pageNumber = rec.pageNumber,
+                        e.coordinates = rec.coordinates
+                    WITH e, rec
+                    FOREACH (_ IN CASE WHEN rec.type = 'image' THEN [1] ELSE [] END |
+                        SET e:Image
+                    )
+                    FOREACH (_ IN CASE WHEN rec.type = 'table' THEN [1] ELSE [] END |
+                        SET e:Table
+                    )
+                    FOREACH (_ IN CASE WHEN rec.text IS NOT NULL THEN [1] ELSE [] END |
+                        SET e.text = rec.text
+                    )
+                    FOREACH (_ IN CASE WHEN rec.imageBase64 IS NOT NULL THEN [1] ELSE [] END |
+                        SET e.imageBase64 = rec.imageBase64,
+                            e.imageMimeType = rec.imageMimeType
+                    )
+                    WITH e
+                    MATCH (d:Document {id: $docId})
+                    CREATE (d)-[:HAS_ELEMENT]->(e)
+                    """,
+                    records=batch,
+                    docId=doc_id,
+                )
+
+    # Create Chunk nodes
+    if chunks:
+        batch_size = 200
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i : i + batch_size]
+            async with driver.session(database=database) as session:
+                await session.run(
+                    """
+                    UNWIND $records AS rec
+                    CREATE (c:Chunk)
+                    SET c.id = rec.id, c.text = rec.text, c.index = rec.index,
+                        c.tokenCount = rec.tokenCount, c.type = rec.type,
+                        c.chunkSetVersion = rec.chunkSetVersion, c.active = rec.active,
+                        c.strategy = rec.strategy, c.strategyParams = rec.strategyParams,
+                        c.documentName = rec.documentName
+                    WITH c
+                    MATCH (d:Document {id: $docId})
+                    CREATE (c)-[:PART_OF]->(d)
+                    """,
+                    records=batch,
+                    docId=doc_id,
+                )
+
+        # NEXT_CHUNK chain
+        if len(chunks) > 1:
+            pairs = [
+                {"fromId": chunks[i]["id"], "toId": chunks[i + 1]["id"]}
+                for i in range(len(chunks) - 1)
+            ]
+            async with driver.session(database=database) as session:
+                await session.run(
+                    """
+                    UNWIND $pairs AS pair
+                    MATCH (a:Chunk {id: pair.fromId})
+                    MATCH (b:Chunk {id: pair.toId})
+                    CREATE (a)-[:NEXT_CHUNK]->(b)
+                    """,
+                    pairs=pairs,
+                )
+
+    # HAS_ELEMENT relationships from chunks
+    if element_records and chunks:
+        placeholder_re = re.compile(r"\[(IMAGE|TABLE): ([^\]]+)\]")
+        chunk_elem_rels: list[dict[str, str]] = []
+        for chunk in chunks:
+            for _kind, elem_id in placeholder_re.findall(chunk["text"]):
+                chunk_elem_rels.append({
+                    "chunkId": chunk["id"],
+                    "elementId": elem_id,
+                })
+        if chunk_elem_rels:
+            for i in range(0, len(chunk_elem_rels), 200):
+                batch = chunk_elem_rels[i : i + 200]
+                async with driver.session(database=database) as session:
+                    await session.run(
+                        """
+                        UNWIND $rels AS rel
+                        MATCH (c:Chunk {id: rel.chunkId})
+                        OPTIONAL MATCH (i:Image {id: rel.elementId})
+                        OPTIONAL MATCH (t:Table {id: rel.elementId})
+                        WITH c, coalesce(i, t) AS target
+                        WHERE target IS NOT NULL
+                        CREATE (c)-[:HAS_ELEMENT]->(target)
+                        """,
+                        rels=batch,
+                    )
+
+    return {
+        "document_id": doc_id,
+        "source_id": result["source_id"],
+        "version": result["version"],
+        "pages": result["total_pages"],
+        "elements": len(element_records),
+        "images": result["fig_counter"],
+        "tables": result["tbl_counter"],
+        "chunks": len(chunks),
+    }
+
+
+async def _reconstruct_from_chunks(
+    driver: AsyncDriver,
+    database: str,
+    document_id: str,
+    doc: dict[str, Any],
+) -> Optional[str]:
+    """Walk the NEXT_CHUNK chain and reconstruct markdown from chunk content.
+
+    For image/table chunks, embeds the image from the linked Element node.
+    Returns the full markdown string, or None if no chunks exist.
+    """
+    # Fetch active chunks walking the NEXT_CHUNK chain
+    async with driver.session(database=database) as session:
+        result = await session.run(
+            """
+            MATCH (c:Chunk)-[:PART_OF]->(d:Document {id: $docId})
+            WHERE c.active = true
+            OPTIONAL MATCH (c)-[:NEXT_CHUNK]->(nxt:Chunk)
+            RETURN c.id AS id, c.text AS text, c.index AS idx,
+                   c.type AS type, c.tokenCount AS tokenCount,
+                   c.strategy AS strategy, c.chunkSetVersion AS csVersion,
+                   c.documentName AS docName,
+                   c.sectionHeading AS sectionHeading,
+                   c.sectionContext AS sectionContext,
+                   nxt.id AS nextId
+            """,
+            docId=document_id,
+        )
+        rows = await result.data()
+
+    if not rows:
+        return None
+
+    # Walk the chain to get correct order
+    by_id: dict[str, dict[str, Any]] = {}
+    has_prev: set[str] = set()
+    for row in rows:
+        by_id[row["id"]] = row
+        if row.get("nextId"):
+            has_prev.add(row["nextId"])
+
+    heads = [rid for rid in by_id if rid not in has_prev]
+    ordered: list[dict[str, Any]] = []
+    visited: set[str] = set()
+    for head in sorted(heads):
+        current = head
+        while current and current not in visited:
+            visited.add(current)
+            row = by_id.get(current)
+            if row:
+                ordered.append(row)
+                current = row.get("nextId")
+            else:
+                break
+    # Append any orphans
+    for rid, row in by_id.items():
+        if rid not in visited:
+            ordered.append(row)
+
+    # Build element image lookup for image/table chunks
+    chunk_element_images: dict[str, tuple[str, str]] = {}
+    async with driver.session(database=database) as session:
+        result = await session.run(
+            """
+            MATCH (c:Chunk)-[:HAS_ELEMENT]->(e)
+            WHERE c.id STARTS WITH $prefix AND e.imageBase64 IS NOT NULL
+            RETURN c.id AS chunkId, e.imageBase64 AS b64,
+                   e.imageMimeType AS mime, e.type AS eType
+            """,
+            prefix=document_id,
+        )
+        for rec in await result.data():
+            mime = rec.get("mime") or "image/png"
+            chunk_element_images[rec["chunkId"]] = (rec["b64"], mime)
+
+    # Build image lookup for pymupdf-style placeholder replacement
+    # Searches across all label types (Element, Image, Table)
+    import re as _re
+    placeholder_re = _re.compile(r"\[(IMAGE|TABLE):\s*([^\]]+)\]")
+    all_elem_images: dict[str, tuple[str, str]] = {}
+    async with driver.session(database=database) as session:
+        result = await session.run(
+            """
+            MATCH (d:Document {id: $docId})-[:HAS_ELEMENT]->(e)
+            WHERE e.imageBase64 IS NOT NULL
+            RETURN e.id AS id, e.imageBase64 AS b64, e.imageMimeType AS mime
+            """,
+            docId=document_id,
+        )
+        for rec in await result.data():
+            mime = rec.get("mime") or "image/png"
+            all_elem_images[rec["id"]] = (rec["b64"], mime)
+
+    # Generate markdown
+    lines: list[str] = []
+    lines.append(f"# {doc.get('name', document_id)} (Chunk Reconstruction)\n")
+    lines.append(f"*Source: {doc.get('source', 'unknown')}*\n")
+    parse_mode = doc.get("parseMode", "unknown")
+    strategy = ordered[0].get("strategy", "unknown") if ordered else "unknown"
+    cs_ver = ordered[0].get("csVersion", "?") if ordered else "?"
+    lines.append(f"*Parse mode: {parse_mode} | Chunking: {strategy} (set {cs_ver})*\n")
+    lines.append(f"*Total chunks: {len(ordered)}*\n\n")
+
+    for chunk in ordered:
+        ctype = chunk.get("type", "text")
+        idx = chunk.get("idx", "?")
+        tokens = chunk.get("tokenCount", "?")
+        sec_heading = chunk.get("sectionHeading", "")
+        sec_context = chunk.get("sectionContext", "")
+        heading_info = f" | section: {sec_heading}" if sec_heading else ""
+        context_info = f" | context: {sec_context}" if sec_context and sec_context != sec_heading else ""
+        lines.append(f"---\n### Chunk {idx} (type: {ctype}, tokens: {tokens}{heading_info}{context_info})\n")
+
+        if ctype == "image":
+            # Show caption text if any
+            text = chunk.get("text", "")
+            if text:
+                lines.append(f"{text}\n")
+            # Embed the image from the linked Element
+            cid = chunk["id"]
+            if cid in chunk_element_images:
+                b64, mime = chunk_element_images[cid]
+                lines.append(f"![{ctype}: {cid}](data:{mime};base64,{b64})\n")
+        elif ctype == "table":
+            text = chunk.get("text", "")
+            if text:
+                lines.append(f"{text}\n")
+            cid = chunk["id"]
+            if cid in chunk_element_images:
+                b64, mime = chunk_element_images[cid]
+                lines.append(f"![table: {cid}](data:{mime};base64,{b64})\n")
+        else:
+            text = chunk.get("text", "")
+            # Replace any element placeholders with embedded images
+            def _replace_placeholder(m: _re.Match) -> str:
+                elem_id = m.group(2).strip()
+                if elem_id in all_elem_images:
+                    b64, mime = all_elem_images[elem_id]
+                    return f"![{m.group(1)}: {elem_id}](data:{mime};base64,{b64})"
+                return m.group(0)
+
+            text = placeholder_re.sub(_replace_placeholder, text)
+            lines.append(f"{text}\n")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+async def _chunk_single_document(
+    driver: AsyncDriver,
+    database: str,
+    document_id: str,
+    strategy: str,
+    chunk_size: int,
+    chunk_overlap: int,
+    include_tables_as_chunks: bool,
+    include_images_as_chunks: bool,
+    clear_existing_chunks: bool,
+    prepend_section_heading: bool,
+) -> dict[str, Any]:
+    """Chunk a single document and write chunks to Neo4j."""
+
+    # Handle existing chunks
+    existing_versions = await get_existing_chunk_set_versions(driver, database, document_id)
+    chunk_set_version = 1
+    if existing_versions:
+        if clear_existing_chunks:
+            deleted = await delete_chunks_for_document(driver, database, document_id)
+            logger.info(f"Cleared {deleted} existing chunks")
+        else:
+            max_ver = max(v["ver"] for v in existing_versions if v["ver"] is not None) if existing_versions else 0
+            chunk_set_version = (max_ver or 0) + 1
+            await deactivate_chunks_for_document(driver, database, document_id)
+
+    # Select chunker
+    if strategy == "token_window":
+        chunker = TokenWindowChunker(
+            chunk_size=chunk_size, chunk_overlap=chunk_overlap
+        )
+    elif strategy == "structured":
+        chunker = StructuredChunker(chunk_size=chunk_size)
+    elif strategy == "by_section":
+        chunker = BySectionChunker()
+    elif strategy == "by_page":
+        chunker = ByPageChunker()
+    else:
+        raise ToolError(f"Unknown strategy: {strategy}")
+
+    # Create chunks
+    chunks = await chunker.create_chunks(
+        driver,
+        database,
+        document_id,
+        include_tables_as_chunks=include_tables_as_chunks,
+        include_images_as_chunks=include_images_as_chunks,
+        prepend_section_heading=prepend_section_heading,
+    )
+
+    if not chunks:
+        return {
+            "document_id": document_id,
+            "chunks_created": 0,
+            "message": "No elements with text found.",
+        }
+
+    # Re-assign chunk IDs to include chunk_set_version for uniqueness
+    for idx, c in enumerate(chunks):
+        c.index = idx
+        c.id = f"{document_id}_cs{chunk_set_version}_chunk_{idx:04d}"
+
+    strategy_params = json.dumps({
+        "chunk_size": chunk_size,
+        "chunk_overlap": chunk_overlap,
+        "include_tables_as_chunks": include_tables_as_chunks,
+        "include_images_as_chunks": include_images_as_chunks,
+        "prepend_section_heading": prepend_section_heading,
+    })
+
+    # Write chunks to Neo4j in batches
+    batch_size = 200
+    total_created = 0
+    for i in range(0, len(chunks), batch_size):
+        batch = chunks[i : i + batch_size]
+        records = [
+            {
+                "id": c.id,
+                "text": c.text,
+                "index": c.index,
+                "tokenCount": c.token_count,
+                "type": c.type,
+                "chunkSetVersion": chunk_set_version,
+                "active": True,
+                "strategy": strategy,
+                "strategyParams": strategy_params,
+                "documentId": document_id,
+                "documentName": c.document_name,
+                "sectionHeading": c.section_heading,
+                "sectionContext": c.section_context,
+                "imageBase64": c.image_base64 or None,
+                "imageMimeType": c.image_mime_type or None,
+                "textAsHtml": c.text_as_html or None,
+            }
+            for c in batch
+        ]
+
+        async with driver.session(database=database) as session:
+            result = await session.run(
+                """
+                UNWIND $records AS rec
+                CREATE (c:Chunk)
+                SET c.id = rec.id,
+                    c.text = rec.text,
+                    c.index = rec.index,
+                    c.tokenCount = rec.tokenCount,
+                    c.type = rec.type,
+                    c.chunkSetVersion = rec.chunkSetVersion,
+                    c.active = rec.active,
+                    c.strategy = rec.strategy,
+                    c.strategyParams = rec.strategyParams,
+                    c.documentName = rec.documentName,
+                    c.sectionHeading = rec.sectionHeading,
+                    c.sectionContext = rec.sectionContext,
+                    c.imageBase64 = rec.imageBase64,
+                    c.imageMimeType = rec.imageMimeType,
+                    c.textAsHtml = rec.textAsHtml
+                WITH c, rec
+                FOREACH (_ IN CASE WHEN rec.type = 'image' THEN [1] ELSE [] END |
+                    SET c:Image
+                )
+                FOREACH (_ IN CASE WHEN rec.type = 'table' THEN [1] ELSE [] END |
+                    SET c:Table
+                )
+                WITH c, rec
+                MATCH (d:Document {id: rec.documentId})
+                CREATE (c)-[:PART_OF]->(d)
+                RETURN count(c) AS cnt
+                """,
+                records=records,
+            )
+            rec = await result.single()
+            total_created += rec["cnt"] if rec else 0
+
+    # Write HAS_ELEMENT relationships from chunks
+    # Uses coalesce across Element/Image/Table labels for cross-mode compatibility
+    elem_rels = []
+    for c in chunks:
+        for eid in c.element_ids:
+            elem_rels.append({"chunkId": c.id, "elementId": eid})
+    if elem_rels:
+        for i in range(0, len(elem_rels), batch_size):
+            batch = elem_rels[i : i + batch_size]
+            async with driver.session(database=database) as session:
+                await session.run(
+                    """
+                    UNWIND $rels AS rel
+                    MATCH (c:Chunk {id: rel.chunkId})
+                    OPTIONAL MATCH (e1:Element {id: rel.elementId})
+                    OPTIONAL MATCH (e2:Image {id: rel.elementId})
+                    OPTIONAL MATCH (e3:Table {id: rel.elementId})
+                    WITH c, coalesce(e1, e2, e3) AS target
+                    WHERE target IS NOT NULL
+                    CREATE (c)-[:HAS_ELEMENT]->(target)
+                    """,
+                    rels=batch,
+                )
+
+    # NEXT_CHUNK chain
+    if len(chunks) > 1:
+        ordered_ids = [c.id for c in sorted(chunks, key=lambda x: x.index)]
+        pairs = [
+            {"fromId": ordered_ids[i], "toId": ordered_ids[i + 1]}
+            for i in range(len(ordered_ids) - 1)
+        ]
+        for i in range(0, len(pairs), batch_size):
+            batch = pairs[i : i + batch_size]
+            async with driver.session(database=database) as session:
+                await session.run(
+                    """
+                    UNWIND $pairs AS pair
+                    MATCH (a:Chunk {id: pair.fromId})
+                    MATCH (b:Chunk {id: pair.toId})
+                    CREATE (a)-[:NEXT_CHUNK]->(b)
+                    """,
+                    pairs=batch,
+                )
+
+    return {
+        "document_id": document_id,
+        "strategy": strategy,
+        "chunk_set_version": chunk_set_version,
+        "chunks_created": total_created,
+        "message": f"Created {total_created} chunks (set v{chunk_set_version}).",
+    }
+
+
+# ===========================================================
+# Entry point
+# ===========================================================
 
 
 async def main(
@@ -919,30 +2180,32 @@ async def main(
     password: Optional[str] = None,
     database: str = "neo4j",
     embedding_model: str = "text-embedding-3-small",
+    extraction_model: str = DEFAULT_EXTRACTION_MODEL,
     transport: Literal["stdio", "sse"] = "stdio",
     host: str = "127.0.0.1",
-    port: int = 8001,
+    port: int = 8002,
 ) -> None:
     """Main entry point for the MCP server."""
-    
-    # Get config from environment or parameters
+
     db_url = db_url or os.environ.get("NEO4J_URI", "bolt://localhost:7687")
     username = username or os.environ.get("NEO4J_USERNAME", "neo4j")
     password = password or os.environ.get("NEO4J_PASSWORD", "password")
     database = database or os.environ.get("NEO4J_DATABASE", "neo4j")
-    embedding_model = embedding_model or os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
-    
+    embedding_model = embedding_model or os.environ.get(
+        "EMBEDDING_MODEL", "text-embedding-3-small"
+    )
+    extraction_model = os.environ.get("EXTRACTION_MODEL", extraction_model)
+
     logger.info(
-        "Starting MCP Neo4j Lexical Graph Server",
+        "Starting MCP Neo4j Lexical Graph v2 Server",
         db_url=db_url,
         database=database,
-        embedding_model=embedding_model
+        embedding_model=embedding_model,
+        extraction_model=extraction_model,
     )
-    
-    # Create Neo4j driver
+
     neo4j_driver = AsyncGraphDatabase.driver(db_url, auth=(username, password))
-    
-    # Verify connection
+
     try:
         async with neo4j_driver.session(database=database) as session:
             await session.run("RETURN 1")
@@ -950,21 +2213,28 @@ async def main(
     except Exception as e:
         logger.error(f"Failed to connect to Neo4j: {e}")
         raise
-    
-    # Create MCP server
-    mcp = create_mcp_server(
+
+    # Create shared components for background processing
+    job_mgr = JobManager()
+    process_pool = ProcessPoolExecutor(max_workers=2)
+
+    logger.info("Process pool and job manager initialized", max_workers=2)
+
+    mcp_server = create_mcp_server(
         neo4j_driver=neo4j_driver,
         database=database,
-        embedding_model=embedding_model
+        embedding_model=embedding_model,
+        extraction_model=extraction_model,
+        job_manager=job_mgr,
+        process_pool=process_pool,
     )
-    
-    # Run server
+
     if transport == "stdio":
         logger.info("Running with stdio transport")
-        await mcp.run_stdio_async()
+        await mcp_server.run_stdio_async()
     else:
         logger.info(f"Running with SSE transport on {host}:{port}")
-        await mcp.run_sse_async(host=host, port=port)
+        await mcp_server.run_sse_async(host=host, port=port)
 
 
 def run():
@@ -974,4 +2244,3 @@ def run():
 
 if __name__ == "__main__":
     run()
-
