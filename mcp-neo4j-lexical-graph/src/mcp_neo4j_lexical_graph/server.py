@@ -1546,6 +1546,11 @@ async def _run_job(
                         "parsed_doc": parsed_doc.model_dump(),
                     }
                 else:
+                    # Filter out VLM-only keys that parse_single_pdf doesn't accept
+                    worker_kwargs = {
+                        k: v for k, v in parse_kwargs.items()
+                        if k not in ("max_vlm_parallel", "vlm_prompt", "text_preview_length")
+                    }
                     try:
                         worker_result = await loop.run_in_executor(
                             process_pool,
@@ -1555,7 +1560,7 @@ async def _run_job(
                                 version=tentative_version,
                                 parse_mode=parse_mode,
                                 progress_queue=progress_queue,
-                                **parse_kwargs,
+                                **worker_kwargs,
                             ),
                         )
                     except BrokenProcessPool:
