@@ -1,273 +1,295 @@
-"""Generate Pydantic models dynamically from extraction schema.
+"""Generate extraction-ready Pydantic models from a data model schema.
 
-Creates specific Pydantic models with:
-- Explicit fields for each entity type
-- Normalization validators (lowercase, strip whitespace)
-- Type validation
+Produces a .py file with:
+- Per-entity models with explicit typed fields (key required, rest Optional)
+- Per-relationship models with meaningful field names (strongly typed)
+- ExtractionOutput wrapper containing lists of all entity/relationship types
+- Basic validators (strip whitespace on key properties)
+- ClassVar metadata for Neo4j write operations
+
+The generated file is designed to be user-customizable: users can add
+domain-specific validators (normalization, enum constraints, regex patterns)
+before running extraction.
 """
 
-from typing import Any, Optional, Type
-from pydantic import BaseModel, Field, field_validator, create_model
+from __future__ import annotations
+
 import json
+import re
+import textwrap
+from typing import Any
+
+from .models import ExtractionSchema
 
 
-def normalize_string(v: str) -> str:
-    """Normalize a string value: lowercase and strip whitespace."""
-    if isinstance(v, str):
-        return v.lower().strip()
-    return v
+def _to_snake_case(name: str) -> str:
+    """Convert PascalCase or SCREAMING_SNAKE_CASE to snake_case."""
+    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", name)
+    s = re.sub(r"([a-z\d])([A-Z])", r"\1_\2", s)
+    return s.lower()
 
 
-def create_entity_model(
-    entity_schema: dict,
-    normalize_key: bool = True
-) -> Type[BaseModel]:
-    """Create a Pydantic model for a specific entity type.
-    
-    Args:
-        entity_schema: Entity type schema with label, key_property, properties
-        normalize_key: Whether to normalize the key property (lowercase)
-    
-    Returns:
-        Dynamically created Pydantic model class
+def _pluralize(name: str) -> str:
+    """Naive English pluralization for field names."""
+    if name.endswith("s") or name.endswith("x") or name.endswith("z"):
+        return name + "es"
+    if name.endswith("y") and len(name) > 1 and name[-2] not in "aeiou":
+        return name[:-1] + "ies"
+    return name + "s"
+
+
+def _to_field_name(label: str, key_prop: str) -> str:
+    """Create a readable field name for a relationship endpoint.
+
+    E.g., ("Drug", "name") -> "drug_name"
+         ("ClinicalStudy", "trialId") -> "clinical_study_trial_id"
     """
-    label = entity_schema["label"]
-    key_property = entity_schema["key_property"]
-    properties = entity_schema.get("properties", [])
-    
-    # Build field definitions
-    field_definitions = {}
-    
-    # Key property is required
-    field_definitions[key_property] = (
-        str,
-        Field(..., description=f"Key property for {label}")
-    )
-    
-    # Additional properties are optional
-    for prop in properties:
-        prop_name = prop["name"]
-        prop_type = prop.get("type", "STRING")
-        prop_desc = prop.get("description", f"{prop_name} property")
-        
-        # Map Neo4j types to Python types
-        python_type = str  # Default
-        if prop_type == "INTEGER":
-            python_type = int
-        elif prop_type == "FLOAT":
-            python_type = float
-        elif prop_type == "BOOLEAN":
-            python_type = bool
-        
-        field_definitions[prop_name] = (
-            Optional[python_type],
-            Field(default=None, description=prop_desc)
-        )
-    
-    # Create the model
-    model = create_model(
-        f"{label}Entity",
-        **field_definitions
-    )
-    
-    # Add validator for key property normalization
-    if normalize_key:
-        @field_validator(key_property, mode='before')
-        @classmethod
-        def normalize_key_property(cls, v):
-            if isinstance(v, str):
-                return v.lower().strip()
-            return v
-        
-        # Attach validator to model
-        model.__pydantic_validators__ = {key_property: normalize_key_property}
-        
-        # Recreate model with validator
-        validators = {f'normalize_{key_property}': field_validator(key_property, mode='before')(lambda cls, v: v.lower().strip() if isinstance(v, str) else v)}
-        
-        model = create_model(
-            f"{label}Entity",
-            __validators__=validators,
-            **field_definitions
-        )
-    
-    return model
+    label_snake = _to_snake_case(label)
+    prop_snake = _to_snake_case(key_prop)
+    return f"{label_snake}_{prop_snake}"
 
 
-def create_extraction_output_model(
-    schema: dict,
-    normalize_keys: bool = True
-) -> Type[BaseModel]:
-    """Create a complete extraction output model from schema.
-    
+def _neo4j_type_to_python(neo4j_type: str) -> str:
+    """Map Neo4j property type to Python type annotation string."""
+    mapping = {
+        "STRING": "str",
+        "INTEGER": "int",
+        "FLOAT": "float",
+        "BOOLEAN": "bool",
+    }
+    return mapping.get(neo4j_type.upper(), "str")
+
+
+def generate_extraction_models_code(schema: ExtractionSchema) -> str:
+    """Generate Python code for extraction-ready Pydantic models.
+
     Args:
-        schema: Full extraction schema with entity_types and relationship_types
-        normalize_keys: Whether to normalize key properties
-    
+        schema: Validated ExtractionSchema
+
     Returns:
-        Dynamically created ExtractionOutput model
+        Python source code as a string, ready to be written to a .py file
     """
-    entity_types = schema.get("entity_types", [])
-    
-    # Create entity models for each type
-    entity_models = {}
-    for entity_schema in entity_types:
-        label = entity_schema["label"]
-        model = create_entity_model(entity_schema, normalize_key=normalize_keys)
-        entity_models[label] = model
-    
-    # Build field definitions for output model
-    # Each entity type gets a list field
-    field_definitions = {}
-    for label, model in entity_models.items():
-        # Convert label to snake_case for field name
-        field_name = label.lower()
-        field_definitions[field_name] = (
-            list[model],
-            Field(default_factory=list, description=f"List of {label} entities")
+    lines: list[str] = []
+
+    # Header
+    lines.append('"""Auto-generated Pydantic models for entity extraction.')
+    lines.append("")
+    lines.append("Generated from extraction schema. You can customize this file:")
+    lines.append("- Add field_validator decorators for domain-specific normalization")
+    lines.append("- Add Literal types or Enum constraints for controlled vocabularies")
+    lines.append("- Adjust field descriptions to guide the LLM better")
+    lines.append("")
+    lines.append("The ExtractionOutput class at the bottom is the response_format")
+    lines.append("sent to the LLM for structured extraction.")
+    lines.append('"""')
+    lines.append("")
+    lines.append("from __future__ import annotations")
+    lines.append("")
+    lines.append("from typing import ClassVar, Optional")
+    lines.append("")
+    lines.append("from pydantic import BaseModel, Field, field_validator")
+    lines.append("")
+    lines.append("")
+
+    # Build a lookup for entity key properties
+    entity_key_props: dict[str, str] = {}
+    entity_key_descs: dict[str, str] = {}
+    for et in schema.entity_types:
+        entity_key_props[et.label] = et.key_property
+        # Find key property description
+        key_desc = f"Key property for {et.label}"
+        for p in et.properties:
+            if p.name == et.key_property and p.description:
+                key_desc = p.description
+                break
+        entity_key_descs[et.label] = key_desc
+
+    # ---- Entity Models ----
+    lines.append("# " + "=" * 60)
+    lines.append("# Entity Models")
+    lines.append("# " + "=" * 60)
+    lines.append("")
+
+    for et in schema.entity_types:
+        class_name = f"{et.label}Entity"
+        lines.append(f"class {class_name}(BaseModel):")
+        if et.description:
+            lines.append(f'    """{et.description}"""')
+        lines.append("")
+        lines.append(f'    _node_label: ClassVar[str] = "{et.label}"')
+        lines.append(f'    _key_property: ClassVar[str] = "{et.key_property}"')
+        lines.append("")
+
+        # Key property (required)
+        key_desc = entity_key_descs.get(et.label, f"{et.key_property}")
+        py_type = "str"
+        # Check if key prop has a type override
+        for p in et.properties:
+            if p.name == et.key_property:
+                py_type = _neo4j_type_to_python(p.type)
+                if p.description:
+                    key_desc = p.description
+                break
+
+        lines.append(
+            f"    {et.key_property}: {py_type} = "
+            f'Field(..., description="{_escape(key_desc)}")'
         )
-    
-    # Add relationships field (generic for now)
-    field_definitions["relationships"] = (
-        list[dict],
-        Field(default_factory=list, description="Extracted relationships")
-    )
-    
-    # Create the output model
-    output_model = create_model(
-        "GeneratedExtractionOutput",
-        **field_definitions
-    )
-    
-    # Store entity models for later reference
-    output_model._entity_models = entity_models
-    
-    return output_model
+
+        # Additional properties (Optional)
+        for prop in et.properties:
+            if prop.name == et.key_property:
+                continue
+            py_type = _neo4j_type_to_python(prop.type)
+            desc = _escape(prop.description or f"{prop.name} property")
+            lines.append(
+                f"    {prop.name}: Optional[{py_type}] = "
+                f'Field(default=None, description="{desc}")'
+            )
+
+        # Basic validator for key property: strip whitespace
+        lines.append("")
+        lines.append(f'    @field_validator("{et.key_property}", mode="before")')
+        lines.append("    @classmethod")
+        lines.append(f"    def _normalize_{_to_snake_case(et.key_property)}(cls, v: object) -> object:")
+        lines.append('        if isinstance(v, str):')
+        lines.append('            return v.strip()')
+        lines.append('        return v')
+        lines.append("")
+        lines.append("")
+
+    # ---- Relationship Models (strongly typed) ----
+    lines.append("# " + "=" * 60)
+    lines.append("# Relationship Models")
+    lines.append("# " + "=" * 60)
+    lines.append("")
+
+    for rel in schema.relationship_types:
+        class_name = _pascal_from_screaming_snake(rel.type)
+
+        source_key = entity_key_props.get(rel.source_entity, "id")
+        target_key = entity_key_props.get(rel.target_entity, "id")
+        source_field = _to_field_name(rel.source_entity, source_key)
+        target_field = _to_field_name(rel.target_entity, target_key)
+
+        # Handle self-referencing relationships (same label for source and target)
+        if source_field == target_field:
+            source_field = f"source_{source_field}"
+            target_field = f"target_{target_field}"
+
+        source_desc = entity_key_descs.get(
+            rel.source_entity, f"Key of {rel.source_entity}"
+        )
+        target_desc = entity_key_descs.get(
+            rel.target_entity, f"Key of {rel.target_entity}"
+        )
+
+        lines.append(f"class {class_name}Rel(BaseModel):")
+        if rel.description:
+            lines.append(f'    """{rel.description}"""')
+        lines.append("")
+        lines.append(f'    _relationship_type: ClassVar[str] = "{rel.type}"')
+        lines.append(f'    _start_node_label: ClassVar[str] = "{rel.source_entity}"')
+        lines.append(f'    _end_node_label: ClassVar[str] = "{rel.target_entity}"')
+        lines.append(f'    _start_key_property: ClassVar[str] = "{source_key}"')
+        lines.append(f'    _end_key_property: ClassVar[str] = "{target_key}"')
+        lines.append("")
+
+        # Source and target key fields
+        source_py_type = "str"
+        target_py_type = "str"
+        for et in schema.entity_types:
+            if et.label == rel.source_entity:
+                for p in et.properties:
+                    if p.name == source_key:
+                        source_py_type = _neo4j_type_to_python(p.type)
+            if et.label == rel.target_entity:
+                for p in et.properties:
+                    if p.name == target_key:
+                        target_py_type = _neo4j_type_to_python(p.type)
+
+        lines.append(
+            f"    {source_field}: {source_py_type} = "
+            f'Field(..., description="{_escape(source_desc)}")'
+        )
+        lines.append(
+            f"    {target_field}: {target_py_type} = "
+            f'Field(..., description="{_escape(target_desc)}")'
+        )
+
+        # Relationship properties (Optional)
+        for prop in rel.properties:
+            py_type = _neo4j_type_to_python(prop.type)
+            desc = _escape(prop.description or f"{prop.name} property")
+            lines.append(
+                f"    {prop.name}: Optional[{py_type}] = "
+                f'Field(default=None, description="{desc}")'
+            )
+
+        lines.append("")
+        lines.append("")
+
+    # ---- ExtractionOutput Wrapper ----
+    lines.append("# " + "=" * 60)
+    lines.append("# Extraction Output (response_format for LLM)")
+    lines.append("# " + "=" * 60)
+    lines.append("")
+    lines.append("class ExtractionOutput(BaseModel):")
+    lines.append('    """Complete extraction output for a single chunk or page.')
+    lines.append("")
+    lines.append("    This model is used as response_format for structured LLM extraction.")
+    lines.append("    Each field is a list of extracted entities or relationships.")
+    lines.append('    """')
+    lines.append("")
+
+    # Entity list fields
+    for et in schema.entity_types:
+        field_name = _pluralize(_to_snake_case(et.label))
+        class_name = f"{et.label}Entity"
+        lines.append(
+            f"    {field_name}: list[{class_name}] = "
+            f'Field(default_factory=list, description="Extracted {et.label} entities")'
+        )
+
+    lines.append("")
+
+    # Relationship list fields
+    for rel in schema.relationship_types:
+        field_name = _to_snake_case(rel.type)
+        class_name = _pascal_from_screaming_snake(rel.type) + "Rel"
+        desc = _escape(rel.description or f"{rel.type} relationships")
+        lines.append(
+            f"    {field_name}: list[{class_name}] = "
+            f'Field(default_factory=list, description="{desc}")'
+        )
+
+    lines.append("")
+
+    return "\n".join(lines)
 
 
-def generate_pydantic_code(schema: dict) -> str:
-    """Generate Python code for the Pydantic model.
-    
-    This creates a .py file that can be reviewed and customized.
-    
-    Args:
-        schema: Full extraction schema
-    
-    Returns:
-        Python code as string
+def generate_extraction_schema_json(schema: ExtractionSchema) -> dict[str, Any]:
+    """Generate extraction schema JSON from a validated ExtractionSchema.
+
+    This JSON is used by the server for Neo4j write operations (key property
+    lookups, label mapping, etc.) and for prompt generation.
     """
-    entity_types = schema.get("entity_types", [])
-    relationship_types = schema.get("relationship_types", [])
-    
-    lines = [
-        '"""Generated Pydantic model for entity extraction.',
-        '',
-        'This file was auto-generated from the extraction schema.',
-        'You can customize validators and add additional logic.',
-        '"""',
-        '',
-        'from typing import Optional',
-        'from pydantic import BaseModel, Field, field_validator',
-        '',
-        '',
-        '# ============================================',
-        '# Normalization Helpers',
-        '# ============================================',
-        '',
-        'def normalize_name(v: str) -> str:',
-        '    """Normalize entity name: lowercase and strip whitespace."""',
-        '    if isinstance(v, str):',
-        '        return v.lower().strip()',
-        '    return v',
-        '',
-        '',
-        '# ============================================',
-        '# Entity Models',
-        '# ============================================',
-        '',
-    ]
-    
-    # Generate entity models
-    for entity_schema in entity_types:
-        label = entity_schema["label"]
-        key_property = entity_schema["key_property"]
-        properties = entity_schema.get("properties", [])
-        description = entity_schema.get("description", f"A {label} entity")
-        
-        lines.append(f'class {label}Entity(BaseModel):')
-        lines.append(f'    """{description}"""')
-        lines.append(f'    ')
-        
-        # Key property
-        lines.append(f'    {key_property}: str = Field(..., description="Key property - uniquely identifies this entity")')
-        
-        # Additional properties
-        for prop in properties:
-            prop_name = prop["name"]
-            prop_type = prop.get("type", "STRING")
-            prop_desc = prop.get("description", f"{prop_name} property")
-            
-            # Map types
-            python_type = "str"
-            if prop_type == "INTEGER":
-                python_type = "int"
-            elif prop_type == "FLOAT":
-                python_type = "float"
-            elif prop_type == "BOOLEAN":
-                python_type = "bool"
-            
-            lines.append(f'    {prop_name}: Optional[{python_type}] = Field(default=None, description="{prop_desc}")')
-        
-        # Add validator
-        lines.append(f'    ')
-        lines.append(f'    @field_validator("{key_property}", mode="before")')
-        lines.append(f'    @classmethod')
-        lines.append(f'    def normalize_{key_property}(cls, v):')
-        lines.append(f'        return normalize_name(v)')
-        lines.append('')
-        lines.append('')
-    
-    # Generate relationship model
-    lines.extend([
-        '# ============================================',
-        '# Relationship Model',
-        '# ============================================',
-        '',
-        'class ExtractedRelationship(BaseModel):',
-        '    """A relationship between entities."""',
-        '    type: str = Field(..., description="Relationship type")',
-        '    source_label: str = Field(..., description="Source entity label")',
-        '    source_key: str = Field(..., description="Source entity key value")',
-        '    target_label: str = Field(..., description="Target entity label")',
-        '    target_key: str = Field(..., description="Target entity key value")',
-        '    ',
-        '    @field_validator("source_key", "target_key", mode="before")',
-        '    @classmethod',
-        '    def normalize_keys(cls, v):',
-        '        return normalize_name(v)',
-        '',
-        '',
-    ])
-    
-    # Generate output model
-    lines.extend([
-        '# ============================================',
-        '# Extraction Output Model',
-        '# ============================================',
-        '',
-        'class ExtractionOutput(BaseModel):',
-        '    """Complete extraction output with all entity types."""',
-        '    ',
-    ])
-    
-    for entity_schema in entity_types:
-        label = entity_schema["label"]
-        field_name = label.lower()
-        lines.append(f'    {field_name}: list[{label}Entity] = Field(default_factory=list, description="Extracted {label} entities")')
-    
-    lines.append('    relationships: list[ExtractedRelationship] = Field(default_factory=list, description="Extracted relationships")')
-    lines.append('')
-    
-    return '\n'.join(lines)
+    return schema.model_dump()
 
 
+# ============================================
+# Helpers
+# ============================================
+
+
+def _escape(s: str) -> str:
+    """Escape a string for use inside double-quoted Python strings."""
+    return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+
+
+def _pascal_from_screaming_snake(name: str) -> str:
+    """Convert SCREAMING_SNAKE_CASE to PascalCase.
+
+    E.g., "INVESTIGATED_IN" -> "InvestigatedIn"
+    """
+    return "".join(word.capitalize() for word in name.split("_"))

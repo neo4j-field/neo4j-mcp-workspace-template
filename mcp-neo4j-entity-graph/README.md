@@ -1,113 +1,106 @@
 # MCP Neo4j Entity Graph Server
 
 [![PyPI version](https://badge.fury.io/py/mcp-neo4j-entity-graph.svg)](https://pypi.org/project/mcp-neo4j-entity-graph/)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-MCP server for extracting entities from graph nodes and creating entity graphs in Neo4j.
+MCP server for extracting entities and relationships from graph nodes using LLM structured output, creating entity graphs directly in Neo4j.
 
 **Supports 100+ LLM providers via LiteLLM** (OpenAI, Anthropic, Google, Azure, Bedrock, Ollama, etc.)
 
-## Installation
-
-```bash
-# Using pip
-pip install mcp-neo4j-entity-graph
-
-# Using uv (recommended)
-uv pip install mcp-neo4j-entity-graph
-```
-
 ## Features
 
+- **Dual extraction pipeline**: Text-only (LLM) and visual (VLM) extraction auto-routed per chunk
+- **Strongly-typed Pydantic models**: Generated from your data model schema with validators
+- **Async background processing**: Long extractions run in background with job tracking
 - **Multi-provider LLM support**: Use any LLM via LiteLLM (OpenAI, Claude, Gemini, etc.)
-- **Structured output**: Uses JSON schema for reliable entity extraction
-- **Direct graph creation**: Entities created directly in Neo4j (no intermediate files)
-- **Schema-driven**: Define what entities/relationships to extract
-- **Provenance tracking**: EXTRACTED_FROM relationships link entities to source nodes
-- **High parallelism**: Default 20 concurrent extractions (configurable)
-- **Batched writes**: Optimized Neo4j writes (batch every 10 chunks by default)
-- **Incremental**: Only processes nodes without prior extraction (unless force=true)
-- **Key normalization**: Entity keys are normalized (lowercase) for better matching
-
-## Supported Models
-
-Models must support structured output (JSON schema). Tested models include:
-
-| Provider | Models |
-|----------|--------|
-| **OpenAI** | `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4o`, `gpt-4o-mini` |
-| **Anthropic** | `claude-sonnet-4-20250514`, `claude-3-5-sonnet-20241022` |
-| **Google** | `gemini/gemini-2.5-pro`, `gemini/gemini-2.5-flash`, `gemini/gemini-1.5-pro` |
-| **Azure OpenAI** | `azure/gpt-4o`, `azure/gpt-4o-mini` |
-| **AWS Bedrock** | `bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0` |
-
-> **Note**: If a model doesn't support structured output, you'll get a clear error message with suggestions.
+- **Schema-driven**: Define entity types and relationships to extract
+- **Provenance tracking**: `EXTRACTED_FROM` relationships link entities to source chunks
+- **High parallelism**: Configurable concurrency (text: up to 50, VLM: up to 50)
+- **Batched writes**: Optimized Neo4j writes (configurable batch size)
+- **Incremental**: Only processes nodes without prior extraction (unless `force=true`)
+- **Multi-pass ready**: Architecture supports entity-only, relationship-only, and corrective passes (v2)
 
 ## Tools
 
-### `extract_entities_from_graph`
+### `convert_schema`
 
-Extracts entities from source nodes and creates entity graph directly in Neo4j.
+Converts data model output from the Data Modeling MCP to extraction schema + Pydantic models.
+
+**Parameters:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `modeling_output` | Yes | JSON output from the Data Modeling MCP server |
+| `output_path` | Yes | Path to save the extraction schema JSON file |
+
+**Outputs:**
+- `{output_path}` - Extraction schema JSON (for Neo4j writes and prompt generation)
+- `{output_path}.py` - Strongly-typed Pydantic models (for LLM structured output)
+
+The `.py` file can be customized with domain-specific validators before running extraction.
+
+### `extract_entities`
+
+Extracts entities and relationships from graph nodes using LLM. Returns immediately with a job ID.
+
+The tool auto-detects chunk types and routes accordingly:
+- **Text chunks** (`type="text"`): sent to LLM with text only
+- **Image/Table chunks** (with `imageBase64`): sent to VLM with text + image
+- **Page nodes** (`:Page` label with `imageBase64`): sent to VLM with text + page image
 
 **Parameters:**
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `schema_json` | required | Path to JSON schema file or inline JSON string |
-| `source_label` | "Chunk" | Label of source nodes to extract from |
-| `source_text_property` | "text" | Property containing text to extract from |
-| `force` | false | If true, reprocess all nodes |
-| `parallel` | 20 | Concurrent extractions (reduce to 5-10 if hitting rate limits) |
-| `batch_size` | 10 | Chunks to batch before writing to Neo4j |
-| `model` | env var | LLM model to use (from EXTRACTION_MODEL env) |
+| `source_label` | `"Chunk"` | Label of source nodes (`Chunk` or `Page`) |
+| `pydantic_model_path` | None | Path to generated `.py` file for typed extraction |
+| `force` | `false` | Re-extract all nodes (ignore existing `EXTRACTED_FROM`) |
+| `text_parallel` | `20` | Max concurrent text extractions |
+| `vlm_parallel` | `5` | Max concurrent VLM extractions |
+| `batch_size` | `10` | Chunks to batch before writing to Neo4j |
+| `model` | env var | LLM model (defaults to `EXTRACTION_MODEL`) |
+| `pass_type` | `"full"` | `full`, `entities_only`, `relationships_only`, `corrective` |
+| `pass_number` | `1` | Pass number for multi-pass extraction |
 
-**Workflow:**
-1. Queries all nodes with the specified label: `MATCH (n:{source_label}) WHERE NOT (n)<-[:EXTRACTED_FROM]-()`
-2. Extracts entities using LLM with structured output (parallel)
-3. Batches results and writes to Neo4j (optimized transactions)
-4. Creates EXTRACTED_FROM relationships for provenance
+### `check_extraction_status`
 
-**Examples:**
+Monitor background extraction jobs.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `job_id` | None | Specific job to check. If omitted, returns all jobs. |
+
+### `cancel_extraction`
+
+Cancel a running extraction job.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `job_id` | Yes | Job ID to cancel |
+
+## Quick Start
 
 ```python
-# Extract from Chunk nodes with default model
-extract_entities_from_graph(schema_json="/path/to/schema.json")
-
-# Use a specific model
-extract_entities_from_graph(
-    schema_json="/path/to/schema.json",
-    model="claude-sonnet-4-20250514"
+# 1. Convert schema from Data Modeling MCP
+convert_schema(
+    modeling_output='{"nodes": [...], "relationships": [...]}',
+    output_path="data_models/my_schema.json"
 )
+# Creates: my_schema.json + my_schema.py (Pydantic models)
 
-# Reduce parallelism if hitting rate limits
-extract_entities_from_graph(
-    schema_json="/path/to/schema.json",
-    parallel=5
+# 2. Extract entities (runs in background)
+extract_entities(
+    schema_json="data_models/my_schema.json",
+    pydantic_model_path="data_models/my_schema.py"
 )
+# Returns: {"job_id": "abc123", "status": "started", ...}
 
-# Extract from Page nodes
-extract_entities_from_graph(
-    schema_json="/path/to/schema.json",
-    source_label="Page",
-    source_text_property="content"
-)
-
-# Force re-extraction of all nodes
-extract_entities_from_graph(schema_json="/path/to/schema.json", force=True)
+# 3. Check progress
+check_extraction_status(job_id="abc123")
+# Returns: {"status": "extracting", "chunks_completed": 45, ...}
 ```
-
-### `convert_schema`
-
-Converts data model output from the Data Modeling MCP to extraction schema format.
-
-**Parameters:**
-- `modeling_output`: JSON output from the Data Modeling MCP server
-- `output_path`: Path to save the extraction schema JSON file
-
-**Outputs:**
-- `{output_path}` - Extraction schema JSON
-- `{output_path}.py` - Generated Pydantic model with normalization validators
 
 ## Schema Format
 
@@ -115,83 +108,68 @@ Converts data model output from the Data Modeling MCP to extraction schema forma
 {
   "entity_types": [
     {
-      "label": "Medication",
-      "description": "A pharmaceutical drug or medication",
+      "label": "Drug",
+      "description": "A pharmaceutical drug",
       "key_property": "name",
       "properties": [
-        {"name": "medicationClass", "type": "STRING", "description": "Drug class"}
+        {"name": "name", "type": "STRING", "description": "Drug name"},
+        {"name": "dose", "type": "STRING", "description": "Dosage"}
       ]
     }
   ],
   "relationship_types": [
     {
       "type": "TREATS",
-      "description": "Drug treats a condition",
-      "source_entity": "Medication",
-      "target_entity": "MedicalCondition"
+      "description": "Drug treats a disease",
+      "source_entity": "Drug",
+      "target_entity": "Disease",
+      "properties": []
     }
   ]
 }
 ```
 
+## Generated Pydantic Models
+
+The `convert_schema` tool generates strongly-typed Pydantic models:
+
+```python
+class DrugEntity(BaseModel):
+    _node_label: ClassVar[str] = "Drug"
+    _key_property: ClassVar[str] = "name"
+
+    name: str = Field(..., description="Drug name")
+    dose: Optional[str] = Field(default=None, description="Dosage")
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _normalize_name(cls, v):
+        if isinstance(v, str):
+            return v.strip()
+        return v
+
+class TreatsRel(BaseModel):
+    _relationship_type: ClassVar[str] = "TREATS"
+    drug_name: str = Field(..., description="Drug name")
+    disease_name: str = Field(..., description="Disease name")
+
+class ExtractionOutput(BaseModel):
+    drugs: list[DrugEntity] = Field(default_factory=list)
+    treats: list[TreatsRel] = Field(default_factory=list)
+```
+
+You can add custom validators (normalization, enum constraints, regex patterns) to the generated file before running extraction.
+
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NEO4J_URI` | bolt://localhost:7687 | Neo4j connection URI |
-| `NEO4J_USERNAME` | neo4j | Neo4j username |
+| `NEO4J_URI` | `bolt://localhost:7687` | Neo4j connection URI |
+| `NEO4J_USERNAME` | `neo4j` | Neo4j username |
 | `NEO4J_PASSWORD` | (required) | Neo4j password |
-| `NEO4J_DATABASE` | neo4j | Neo4j database name |
-| `EXTRACTION_MODEL` | gpt-5-mini | Default LLM model for extraction |
+| `NEO4J_DATABASE` | `neo4j` | Neo4j database name |
+| `EXTRACTION_MODEL` | `gpt-5-mini` | Default LLM model for extraction |
 | `OPENAI_API_KEY` | - | Required for OpenAI models |
-| `ANTHROPIC_API_KEY` | - | Required for Anthropic models |
-| `GEMINI_API_KEY` | - | Required for Google Gemini models |
-
-## LLM Provider Configuration
-
-LiteLLM supports 100+ providers. Set the appropriate API key for your provider:
-
-### OpenAI (default)
-```bash
-export OPENAI_API_KEY="sk-..."
-export EXTRACTION_MODEL="gpt-5-mini"  # or gpt-4o-mini, gpt-4o
-```
-
-### Anthropic Claude
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-export EXTRACTION_MODEL="claude-sonnet-4-20250514"
-```
-
-### Google Gemini
-```bash
-export GEMINI_API_KEY="..."
-export EXTRACTION_MODEL="gemini/gemini-2.5-pro"
-```
-
-### Azure OpenAI
-```bash
-export AZURE_API_KEY="..."
-export AZURE_API_BASE="https://your-resource.openai.azure.com/"
-export AZURE_API_VERSION="2024-02-15-preview"
-export EXTRACTION_MODEL="azure/your-deployment-name"
-```
-
-### AWS Bedrock
-```bash
-export AWS_ACCESS_KEY_ID="..."
-export AWS_SECRET_ACCESS_KEY="..."
-export AWS_REGION_NAME="us-east-1"
-export EXTRACTION_MODEL="bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"
-```
-
-### Local Models (Ollama)
-```bash
-export EXTRACTION_MODEL="ollama/llama3.1"
-# Note: Local models may not support structured output
-```
-
-> See [LiteLLM docs](https://docs.litellm.ai/docs/providers) for all providers.
 
 ## Usage with Cursor
 
@@ -201,10 +179,13 @@ Add to your `~/.cursor/mcp.json`:
 {
   "mcpServers": {
     "neo4j-entity-graph": {
-      "command": "uvx",
-      "args": ["mcp-neo4j-entity-graph"],
+      "command": "uv",
+      "args": [
+        "--directory", "/path/to/mcp-neo4j-entity-graph",
+        "run", "mcp-neo4j-entity-graph"
+      ],
       "env": {
-        "NEO4J_URI": "bolt://localhost:7687",
+        "NEO4J_URI": "neo4j://127.0.0.1:7687",
         "NEO4J_USERNAME": "neo4j",
         "NEO4J_PASSWORD": "your-password",
         "OPENAI_API_KEY": "your-api-key",
@@ -215,58 +196,25 @@ Add to your `~/.cursor/mcp.json`:
 }
 ```
 
-> **Note**: `uvx` automatically downloads and runs the package from PyPI. No local installation needed!
+## Performance
 
-## Rate Limits & Performance
+Tested on 5 pharma pipeline PDFs (102 pages) with `gpt-5-mini`:
 
-### Parallelism
+| Mode | Concurrency | Time | Entities | Relationships |
+|------|-------------|------|----------|---------------|
+| Text-only | 50 | 107s | 1,584 | 1,257 |
+| VLM (page images) | 50 | 114s | 1,597 | 1,378 |
 
-The default parallelism is **20** concurrent extractions, optimized for fast processing. However, this may exceed rate limits for some providers.
+## Architecture
 
-**If you see rate limit errors**, reduce the `parallel` parameter:
-
-```python
-# For rate-limited accounts
-extract_entities_from_graph(
-    schema_json="/path/to/schema.json",
-    parallel=5  # Reduce from default 20
-)
 ```
-
-### Batch Size
-
-Extractions are batched before writing to Neo4j (default: 10 chunks per batch). This reduces Neo4j transactions while maintaining progress visibility.
-
-```python
-# Larger batches for better Neo4j performance
-extract_entities_from_graph(
-    schema_json="/path/to/schema.json",
-    batch_size=20
-)
-```
-
-## Usage Example
-
-```python
-# 1. Convert schema from Data Modeling MCP
-convert_schema(
-    modeling_output='{"nodes": [...], "relationships": [...]}',
-    output_path="/path/to/schema.json"
-)
-# Creates: schema.json + schema.py (Pydantic model)
-
-# 2. Extract entities from all Chunk nodes
-extract_entities_from_graph(
-    schema_json="/path/to/schema.json"
-)
-# Default: parallel=20, batch_size=10, model=gpt-5-mini
-
-# 3. Use a different model
-extract_entities_from_graph(
-    schema_json="/path/to/schema.json",
-    model="claude-sonnet-4-20250514",
-    parallel=10  # Claude may have stricter rate limits
-)
+server.py          - MCP tools (convert_schema, extract_entities, check/cancel)
+job_manager.py     - Async job tracking, progress, cancellation
+base_extractor.py  - Shared: prompts, parsing, model loading
+text_extractor.py  - Text-only LLM extraction (high parallelism)
+vlm_extractor.py   - Vision+text VLM extraction (configurable parallelism)
+schema_generator.py - Pydantic model code generation from schemas
+models.py          - Internal types (ExtractionSchema, ClassifiedChunk, etc.)
 ```
 
 ## Graph Schema
@@ -278,11 +226,10 @@ After extraction, your Neo4j database will contain:
 (:Entity)-[relationship]->(:Entity)
 ```
 
-Example query to explore extracted entities:
+Example query:
 
 ```cypher
-// Find all entities extracted from a document
-MATCH (e)-[:EXTRACTED_FROM]->(c:Chunk)-[:PART_OF]->(d:Document {name: "my-document"})
+MATCH (e)-[:EXTRACTED_FROM]->(c:Chunk)-[:PART_OF]->(d:Document {name: "my-doc"})
 RETURN labels(e)[0] as type, count(e) as count
 ORDER BY count DESC
 ```
