@@ -55,6 +55,9 @@ class ParsedElement(BaseModel):
         None, description="Bounding box {x0, y0, x1, y1}."
     )
     level: Optional[int] = Field(None, description="Heading level (1-6).")
+    font_size_max: Optional[float] = Field(
+        None, description="Max font size in the block (for heading level inference)."
+    )
     page_number: int = Field(..., description="0-based page number this element belongs to.")
 
     # Caption linkage
@@ -104,7 +107,7 @@ class ParsedDocument(BaseModel):
     version: int = Field(1, description="Version number.")
     name: str = Field(..., description="Human-readable document name.")
     source: str = Field(..., description="Source file path or URL.")
-    parse_mode: str = Field(..., description="Parser used: text_only, docling, page_image.")
+    parse_mode: str = Field(..., description="Parser used: pymupdf, docling, page_image, vlm_blocks.")
     parse_params: dict[str, Any] = Field(
         default_factory=dict, description="All parameters used for parsing."
     )

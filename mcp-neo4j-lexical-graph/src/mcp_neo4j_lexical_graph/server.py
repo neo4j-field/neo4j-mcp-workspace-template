@@ -84,6 +84,7 @@ _TIME_PER_PAGE: dict[str, float] = {
     "pymupdf": 1.5,
     "page_image": 2.5,
     "docling": 15.0,
+    "vlm_blocks": 12.0,
 }
 
 # Threshold (seconds) above which a warning is included in the response
@@ -130,7 +131,7 @@ def create_mcp_server(
             None, description="Custom sourceId (defaults to filename). Ignored for folders."
         ),
         parse_mode: str = Field(
-            "pymupdf", description="Parse mode: 'pymupdf', 'docling', or 'page_image'"
+            "pymupdf", description="Parse mode: 'pymupdf', 'docling', 'page_image', or 'vlm_blocks'"
         ),
         store_page_images: bool = Field(
             False, description="Render and store page images on Page nodes"
@@ -140,10 +141,10 @@ def create_mcp_server(
             None, description="JSON string of extra Document properties"
         ),
         skip_furniture: bool = Field(
-            True, description="Skip headers/footers (docling mode)"
+            True, description="Skip headers/footers (docling and vlm_blocks modes)"
         ),
         extract_sections: bool = Field(
-            True, description="Extract section hierarchy (docling mode)"
+            True, description="Extract section hierarchy (docling and vlm_blocks modes)"
         ),
         extract_toc: bool = Field(
             True, description="Extract TOC entries (docling mode)"
@@ -156,6 +157,15 @@ def create_mcp_server(
         extract_tables: bool = Field(
             True, description="Extract tables as Element nodes with imageBase64 + text (pymupdf mode)"
         ),
+        max_vlm_parallel: int = Field(
+            10, description="Max concurrent VLM calls per document (vlm_blocks mode)"
+        ),
+        vlm_prompt: Optional[str] = Field(
+            None, description="Custom VLM system prompt override (vlm_blocks mode)"
+        ),
+        text_preview_length: int = Field(
+            200, description="Characters of text preview sent to VLM per block (vlm_blocks mode)"
+        ),
     ) -> str:
         """Parse PDF(s) and create the lexical graph in Neo4j.
 
@@ -167,6 +177,7 @@ def create_mcp_server(
           Set extract_images=False and extract_tables=False for text-only (Document + Chunk only).
         - docling: Full layout analysis with sections, tables, captions. (requires docling extra)
         - page_image: Page images + text. Creates Document + Page nodes for VLM use.
+        - vlm_blocks: PyMuPDF blocks + VLM reading order/classification. Creates Document + Page + Element + Section nodes.
 
         **Returns immediately** with a job_id. Use check_processing_status(job_id) to monitor.
         """
@@ -227,6 +238,9 @@ def create_mcp_server(
             "extract_sections": extract_sections,
             "extract_toc": extract_toc,
             "store_page_images": store_page_images,
+            "max_vlm_parallel": max_vlm_parallel,
+            "vlm_prompt": vlm_prompt,
+            "text_preview_length": text_preview_length,
         }
 
         # Launch background task
@@ -243,6 +257,7 @@ def create_mcp_server(
                 output_dir=output_dir,
                 document_id=document_id,
                 parse_kwargs=parse_kwargs,
+                extraction_model=extraction_model,
             )
         )
         _job_manager.register_task(job.id, task)
@@ -1455,6 +1470,7 @@ async def _run_job(
     output_dir: str,
     document_id: Optional[str],
     parse_kwargs: dict[str, Any],
+    extraction_model: str = "gpt-5-mini",
 ) -> None:
     """Background task that orchestrates parse-one-write-one processing.
 
@@ -1497,31 +1513,57 @@ async def _run_job(
                 tentative_version = 1
 
                 logger.info(
-                    "Submitting to subprocess",
+                    "Submitting for parsing",
                     job_id=job_id,
                     file=pdf_name,
                     mode=parse_mode,
                     tentative_version=tentative_version,
                 )
 
-                try:
-                    worker_result = await loop.run_in_executor(
-                        process_pool,
-                        _make_worker_call(
-                            pdf_path=pdf_path,
-                            source_id=source_id,
-                            version=tentative_version,
-                            parse_mode=parse_mode,
-                            progress_queue=progress_queue,
-                            **parse_kwargs,
-                        ),
+                if parse_mode == "vlm_blocks":
+                    # VLM blocks mode: async parser, runs in the event loop directly
+                    from .parsers.vlm_blocks import VLMBlocksParser
+
+                    vlm_parser = VLMBlocksParser(
+                        vlm_model=extraction_model,
+                        max_parallel=parse_kwargs.get("max_vlm_parallel", 10),
                     )
-                except BrokenProcessPool:
-                    logger.error("Process pool crashed, recreating", job_id=job_id)
-                    raise RuntimeError(
-                        f"Subprocess crashed while parsing {pdf_name}. "
-                        "This may be due to memory or a docling bug."
+                    parsed_doc = await vlm_parser.parse_async(
+                        pdf_path=pdf_path,
+                        source_id=source_id,
+                        version=tentative_version,
+                        metadata=parse_kwargs.get("metadata"),
+                        dpi=parse_kwargs.get("dpi", 150),
+                        store_page_images=parse_kwargs.get("store_page_images", False),
+                        vlm_prompt=parse_kwargs.get("vlm_prompt"),
+                        skip_furniture=parse_kwargs.get("skip_furniture", True),
+                        extract_sections=parse_kwargs.get("extract_sections", True),
+                        text_preview_length=parse_kwargs.get("text_preview_length", 200),
                     )
+                    # Wrap as worker_result for version remapping compatibility
+                    worker_result = {
+                        "parse_mode": "vlm_blocks",
+                        "parsed_doc": parsed_doc.model_dump(),
+                    }
+                else:
+                    try:
+                        worker_result = await loop.run_in_executor(
+                            process_pool,
+                            _make_worker_call(
+                                pdf_path=pdf_path,
+                                source_id=source_id,
+                                version=tentative_version,
+                                parse_mode=parse_mode,
+                                progress_queue=progress_queue,
+                                **parse_kwargs,
+                            ),
+                        )
+                    except BrokenProcessPool:
+                        logger.error("Process pool crashed, recreating", job_id=job_id)
+                        raise RuntimeError(
+                            f"Subprocess crashed while parsing {pdf_name}. "
+                            "This may be due to memory or a docling bug."
+                        )
 
                 # Update: writing phase -- determine real version NOW
                 job_manager.update_progress(job_id, current_stage="writing")
@@ -1696,7 +1738,7 @@ async def _write_worker_result_to_neo4j(
     if parse_mode == "pymupdf":
         return await _write_pymupdf_result(driver, database, worker_result)
     else:
-        # docling or page_image -- reconstruct ParsedDocument from dict
+        # docling, page_image, or vlm_blocks -- reconstruct ParsedDocument from dict
         parsed = ParsedDocument.model_validate(worker_result["parsed_doc"])
         summary = await write_parsed_document(driver, database, parsed)
         return summary

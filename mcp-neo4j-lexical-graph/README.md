@@ -2,7 +2,7 @@
 
 MCP server for creating rich lexical graphs from PDF documents in Neo4j. Designed for Neo4j sales engineers to quickly build PDF-to-graph and GraphRAG agent chatbot POCs.
 
-Supports three parsing strategies (PyMuPDF, Docling, page-image), pluggable chunking, document versioning, VLM-based description generation, and vector/fulltext search with Neo4j 2026.01 native VECTOR type and document-name prefiltering.
+Supports four parsing strategies (PyMuPDF, Docling, page-image, VLM block ordering), pluggable chunking, document versioning, VLM-based description generation, and vector/fulltext search with Neo4j 2026.01 native VECTOR type and document-name prefiltering.
 
 ## Graph Model
 
@@ -29,6 +29,7 @@ Node types depend on the parse mode used. See [Parse Modes](#parse-modes) below.
 | `pymupdf` | Document, Chunk, Image, Table | General-purpose text + visual extraction |
 | `docling` | Document, Page, Element, Section, (then Chunk via chunking tool) | Complex layouts, section-aware chunking |
 | `page_image` | Document, Page | Slides/presentations for VLM-based extraction |
+| `vlm_blocks` | Document, Page, Element, Section, (then Chunk via chunking tool) | Complex layouts without docling dependency (uses VLM API) |
 
 ## Quick Start
 
@@ -101,4 +102,4 @@ Add to your `.cursor/mcp.json`:
 - **Neo4j 2026.01+** (native VECTOR type, vector search with filters)
 - **Python 3.10+**
 - API key for your embedding provider (OpenAI, Azure, Cohere, Voyage, Ollama, etc.)
-- API key for VLM if using `generate_chunk_descriptions` or `assign_section_hierarchy`
+- API key for VLM if using `vlm_blocks` mode, `generate_chunk_descriptions`, or `assign_section_hierarchy`

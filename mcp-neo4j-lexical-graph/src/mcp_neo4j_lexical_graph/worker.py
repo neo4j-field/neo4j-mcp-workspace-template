@@ -116,6 +116,11 @@ def parse_single_pdf(
             store_page_images=store_page_images,
             progress_queue=progress_queue,
         )
+    elif parse_mode == "vlm_blocks":
+        raise RuntimeError(
+            "vlm_blocks mode is async-only and cannot run in a subprocess worker. "
+            "It is handled directly in the server's event loop."
+        )
     else:
         raise ValueError(f"Unknown parse_mode: {parse_mode}")
 

@@ -183,6 +183,8 @@ async def write_parsed_document(
             rec["coordinates"] = json.dumps(e.coordinates)
         if e.level is not None:
             rec["level"] = e.level
+        if e.font_size_max is not None:
+            rec["fontSizeMax"] = e.font_size_max
         elem_records.append(rec)
 
     await _batch_write(
