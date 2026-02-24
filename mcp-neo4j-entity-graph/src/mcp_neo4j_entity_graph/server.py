@@ -27,8 +27,8 @@ from neo4j import AsyncGraphDatabase, AsyncDriver
 from pydantic import BaseModel, Field
 
 # Load environment variables from project root .env file
-_project_root = pathlib.Path(__file__).resolve().parent.parent.parent.parent
-load_dotenv(_project_root / ".env")
+# _project_root = pathlib.Path(__file__).resolve().parent.parent.parent.parent
+load_dotenv("../../.env")
 
 from .base_extractor import (
     DEFAULT_EXTRACTION_MODEL,

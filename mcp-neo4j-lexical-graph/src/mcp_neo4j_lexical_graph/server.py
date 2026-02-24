@@ -38,8 +38,8 @@ from neo4j import AsyncGraphDatabase, AsyncDriver
 from pydantic import Field
 
 # Load environment variables from project root .env file
-_project_root = Path(__file__).resolve().parent.parent.parent.parent
-load_dotenv(_project_root / ".env")
+# _project_root = Path(__file__).resolve().parent.parent.parent.parent
+load_dotenv("../../.env")
 
 from .chunkers.by_page import ByPageChunker
 from .chunkers.by_section import BySectionChunker
@@ -2230,7 +2230,7 @@ async def main(
     db_url: Optional[str] = None,
     username: Optional[str] = None,
     password: Optional[str] = None,
-    database: str = "neo4j",
+    database: Optional[str] = None,
     embedding_model: str = "text-embedding-3-small",
     extraction_model: str = DEFAULT_EXTRACTION_MODEL,
     transport: Literal["stdio", "sse"] = "stdio",
@@ -2243,9 +2243,7 @@ async def main(
     username = username or os.environ.get("NEO4J_USERNAME", "neo4j")
     password = password or os.environ.get("NEO4J_PASSWORD", "password")
     database = database or os.environ.get("NEO4J_DATABASE", "neo4j")
-    embedding_model = embedding_model or os.environ.get(
-        "EMBEDDING_MODEL", "text-embedding-3-small"
-    )
+    embedding_model = os.environ.get("EMBEDDING_MODEL", embedding_model)
     extraction_model = os.environ.get("EXTRACTION_MODEL", extraction_model)
 
     logger.info(
