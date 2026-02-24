@@ -72,3 +72,16 @@ analytical_queries:
 ## 5. Validate that graph adequately addresses the use cases 
 * Use the Cypher MCP Server to execute the analytical Cypher queries against the Neo4j database
 * Analyze the results and ensure that they are addressing the original use cases
+
+## 6. Generate Report
+A final report should be presented to the end user. This will include the following details.
+* Source data and descriptions
+* Use cases defined for the application
+* Final graph data model and descriptions of each node and relationship
+* Cypher queries that address the use cases and descriptions of each query
+* Any gaps in the final application due to
+  * Missing source data
+  * Inadequate Cypher
+  * Unclear use cases
+  * Any additional reasons
+* Final summary of the state of the application with direction for next steps
