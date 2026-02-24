@@ -488,6 +488,28 @@ def _detect_cross_page_furniture(
     return exclude
 
 
+def _render_bbox_from_pdf(
+    pdf_path: str,
+    page_number: int,
+    bbox: tuple[float, float, float, float],
+    dpi: int = 150,
+) -> tuple[str | None, str | None]:
+    """Render a page region to PNG base64. Returns (image_base64, image_mime_type) or (None, None) on failure."""
+    try:
+        doc = fitz.open(pdf_path)
+        try:
+            page = doc[page_number]
+            clip = fitz.Rect(bbox)
+            pix = page.get_pixmap(clip=clip, dpi=dpi)
+            b64 = base64.b64encode(pix.tobytes("png")).decode("ascii")
+            return b64, "image/png"
+        finally:
+            doc.close()
+    except Exception as e:
+        logger.warning("Failed to render bbox for image element", path=pdf_path, page=page_number, error=str(e))
+        return None, None
+
+
 def _build_parsed_document(
     all_pages: list[_PageData],
     all_vlm_results: list[list[BlockResult]],
@@ -529,13 +551,21 @@ def _build_parsed_document(
             elem_id = f"{doc_id}_elem_{elem_counter}"
             elem_counter += 1
 
+            image_b64 = rb.image_base64
+            image_mime = rb.image_mime_type
+            # VLM may classify as "image" a block that PyMuPDF did not report as native image
+            # (e.g. vector figures, form XObjects). Fallback: render the bbox from the PDF.
+            if our_type == "image" and not image_b64:
+                dpi = int(parse_params.get("dpi", 150))
+                image_b64, image_mime = _render_bbox_from_pdf(source, pn, rb.bbox, dpi=dpi)
+
             element = ParsedElement(
                 id=elem_id,
                 type=our_type,
                 text=rb.text or None,
                 text_as_html=rb.text_as_html,
-                image_base64=rb.image_base64,
-                image_mime_type=rb.image_mime_type,
+                image_base64=image_b64,
+                image_mime_type=image_mime,
                 coordinates={"x0": rb.bbox[0], "y0": rb.bbox[1], "x1": rb.bbox[2], "y1": rb.bbox[3]},
                 level=1 if our_type == "heading" else None,
                 font_size_max=rb.font_size_max if rb.font_size_max > 0 else None,
