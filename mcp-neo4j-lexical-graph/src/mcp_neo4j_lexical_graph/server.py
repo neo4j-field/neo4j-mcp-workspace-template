@@ -30,11 +30,16 @@ from pathlib import Path
 from typing import Any, Literal, Optional
 
 import structlog
+from dotenv import load_dotenv
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from neo4j import AsyncGraphDatabase, AsyncDriver
 from pydantic import Field
+
+# Load environment variables from project root .env file
+_project_root = Path(__file__).resolve().parent.parent.parent.parent
+load_dotenv(_project_root / ".env")
 
 from .chunkers.by_page import ByPageChunker
 from .chunkers.by_section import BySectionChunker

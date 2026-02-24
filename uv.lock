@@ -712,6 +712,7 @@ dependencies = [
     { name = "mcp-neo4j-cypher" },
     { name = "neo4j" },
     { name = "pandas" },
+    { name = "python-dotenv" },
 ]
 
 [package.metadata]
@@ -720,6 +721,7 @@ requires-dist = [
     { name = "mcp-neo4j-cypher", specifier = ">=0.5.1" },
     { name = "neo4j", specifier = ">=6.0.3" },
     { name = "pandas", specifier = ">=2.3.3" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
 ]
 
 [[package]]

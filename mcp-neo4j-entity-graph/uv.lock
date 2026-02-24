@@ -1,4 +1,5 @@
 version = 1
+revision = 1
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -1458,6 +1459,7 @@ dependencies = [
     { name = "litellm" },
     { name = "neo4j" },
     { name = "pydantic" },
+    { name = "python-dotenv" },
     { name = "structlog" },
 ]
 
@@ -1467,6 +1469,7 @@ requires-dist = [
     { name = "litellm", specifier = ">=1.40.0" },
     { name = "neo4j", specifier = ">=5.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "structlog", specifier = ">=24.0.0" },
 ]
 
