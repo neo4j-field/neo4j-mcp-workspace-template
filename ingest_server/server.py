@@ -1,8 +1,10 @@
 import os
 import asyncio
+from pathlib import Path
+from dotenv import load_dotenv
 from fastmcp import FastMCP
 
-from mcp_neo4j_cypher.server import create_mcp_server  
+from mcp_neo4j_cypher.server import create_mcp_server
 from neo4j import AsyncGraphDatabase
 from fastmcp.tools.tool import ToolResult
 from fastmcp.tools import Tool
@@ -11,6 +13,10 @@ from fastmcp.tools.tool_transform import ArgTransform
 
 
 import pandas as pd
+
+# Load environment variables from project root .env file
+_project_root = Path(__file__).resolve().parent.parent
+load_dotenv(_project_root / ".env")
 
 driver = AsyncGraphDatabase.driver(os.getenv("NEO4J_URI"), auth=(os.getenv("NEO4J_USERNAME"), os.getenv("NEO4J_PASSWORD")))
 
