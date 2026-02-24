@@ -1,0 +1,3 @@
+I am building an application with Neo4j based on PubMed documents. 
+I would like to be able to link specific patients with research that supports medication and treatment decisions.
+I would like to link research articles that study the same medication or patient demographic.
