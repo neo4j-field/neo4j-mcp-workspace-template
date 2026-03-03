@@ -1,0 +1,4 @@
+I am building an application with Neo4j based on PubMed documents. 
+My data is in data/csv/
+I would like to track patient journies and identify treatment patterns that have positive outcomes.
+These treatment patterns may then be used for patients in similar demographics.

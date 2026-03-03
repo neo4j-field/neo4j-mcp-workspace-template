@@ -20,7 +20,7 @@ load_dotenv(_project_root / ".env")
 
 driver = AsyncGraphDatabase.driver(os.getenv("NEO4J_URI"), auth=(os.getenv("NEO4J_USERNAME"), os.getenv("NEO4J_PASSWORD")))
 
-cypher_mcp = create_mcp_server(driver)
+cypher_mcp = create_mcp_server(driver, os.getenv("NEO4J_DATABASE", "neo4j"))
 
 ingest_mcp = FastMCP(name="ingest_mcp")
 
