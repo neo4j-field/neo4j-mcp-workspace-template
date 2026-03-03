@@ -15,8 +15,9 @@ from fastmcp.tools.tool_transform import ArgTransform
 import pandas as pd
 
 # Load environment variables from project root .env file
-_project_root = Path(__file__).resolve().parent.parent
-load_dotenv(_project_root / ".env")
+# _project_root = Path(__file__).resolve().parent.parent
+# load_dotenv(_project_root / ".env")
+load_dotenv()
 
 driver = AsyncGraphDatabase.driver(os.getenv("NEO4J_URI"), auth=(os.getenv("NEO4J_USERNAME"), os.getenv("NEO4J_PASSWORD")))
 
@@ -54,6 +55,12 @@ async def setup():
                                  )
     ingest_mcp.add_tool(ingest_tool)
 
+async def run():
+    await setup()
+    await ingest_mcp.run_stdio_async()
+
+def main():
+    asyncio.run(run())
+
 if __name__ == "__main__":
-    asyncio.run(setup())
-    ingest_mcp.run(transport="stdio")
+    main()

@@ -21,9 +21,14 @@
                 "BIGQUERY_PROJECT": "PROJECT_ID"
               }
             },
-    "ingest_mcp": {
+    "neo4j-ingest": {
       "command": "uv",
-      "args": [ "run", "ingest_server/server.py" ]
+      "args": [ 
+        "--directory",
+        "mcp-neo4j-ingest",
+        "run",
+        "mcp-neo4j-ingest"
+      ]
     },
     "neo4j-lexical-graph": {
       "command": "uv",
