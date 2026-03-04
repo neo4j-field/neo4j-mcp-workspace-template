@@ -37,9 +37,7 @@ from mcp.types import ToolAnnotations
 from neo4j import AsyncGraphDatabase, AsyncDriver
 from pydantic import Field
 
-# Load environment variables from project root .env file
-# _project_root = Path(__file__).resolve().parent.parent.parent.parent
-load_dotenv("../../.env")
+load_dotenv()
 
 from .chunkers.by_page import ByPageChunker
 from .chunkers.by_section import BySectionChunker
