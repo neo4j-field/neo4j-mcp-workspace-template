@@ -40,7 +40,6 @@ For each of the 5 servers, confirm whether its tools are available:
 | Server | Status |
 |--------|--------|
 | `neo4j-data-modeling` | available / not loaded |
-| `neo4j-cypher` | available / not loaded |
 | `neo4j-ingest` | available / not loaded |
 | `neo4j-lexical-graph` | available / not loaded |
 | `neo4j-entity-graph` | available / not loaded |
@@ -50,7 +49,7 @@ If tools are not loaded despite `mcp.json` existing: tell the user to reopen the
 
 ### 4. Test Neo4j connectivity
 
-If `neo4j-cypher` is available, run:
+If `neo4j-graphrag` is available, run:
 ```cypher
 RETURN 'ok' AS status
 ```
@@ -70,7 +69,6 @@ Print a readiness table:
 ║  Configuration files    OK / MISSING           ║
 ║  Neo4j connection       OK / FAILED            ║
 ║  neo4j-data-modeling    online / not loaded    ║
-║  neo4j-cypher           online / not loaded    ║
 ║  neo4j-ingest           online / not loaded    ║
 ║  neo4j-lexical-graph    online / not loaded    ║
 ║  neo4j-entity-graph     online / not loaded    ║

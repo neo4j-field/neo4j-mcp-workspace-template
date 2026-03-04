@@ -124,12 +124,31 @@ EMBEDDING_MODEL="${EMBEDDING_MODEL:-text-embedding-3-small}"
 EXTRACTION_MODEL="${EXTRACTION_MODEL:-gpt-5-mini}"
 
 # ─────────────────────────────────────────────────────────────
-# 4. uv sync for each local server
+# 4. Clone graphrag server
+# ─────────────────────────────────────────────────────────────
+echo ""
+echo -e "${BOLD}── Cloning neo4j-graphrag MCP server ─────────────${RESET}"
+
+GRAPHRAG_DIR="$WORKSPACE_DIR/mcp-neo4j-graphrag"
+if [ ! -d "$GRAPHRAG_DIR" ]; then
+  if ! command -v git &> /dev/null; then
+    error "git is not installed. Cannot clone mcp-neo4j-graphrag."
+    exit 1
+  fi
+  info "Cloning mcp-neo4j-graphrag..."
+  git clone --depth 1 https://github.com/neo4j-field/mcp-neo4j-graphrag "$GRAPHRAG_DIR" --quiet
+  success "mcp-neo4j-graphrag cloned"
+else
+  info "mcp-neo4j-graphrag already present, skipping clone"
+fi
+
+# ─────────────────────────────────────────────────────────────
+# 5. uv sync for each local server
 # ─────────────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}── Installing local MCP server dependencies ──────${RESET}"
 
-for server_dir in mcp-neo4j-ingest mcp-neo4j-lexical-graph mcp-neo4j-entity-graph; do
+for server_dir in mcp-neo4j-ingest mcp-neo4j-lexical-graph mcp-neo4j-entity-graph mcp-neo4j-graphrag; do
   abs_dir="$WORKSPACE_DIR/$server_dir"
   if [ -d "$abs_dir" ]; then
     info "uv sync → $server_dir"
@@ -141,7 +160,7 @@ for server_dir in mcp-neo4j-ingest mcp-neo4j-lexical-graph mcp-neo4j-entity-grap
 done
 
 # ─────────────────────────────────────────────────────────────
-# 5. Optional: BigQuery via toolbox
+# 6. Optional: BigQuery via toolbox
 # ─────────────────────────────────────────────────────────────
 BIGQUERY_PROJECT="${BIGQUERY_PROJECT:-}"
 INCLUDE_BIGQUERY=false
@@ -171,7 +190,7 @@ if command -v toolbox &> /dev/null; then
 fi
 
 # ─────────────────────────────────────────────────────────────
-# 6. Generate mcp.json
+# 7. Generate mcp.json
 # ─────────────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}── Generating MCP configuration ──────────────────${RESET}"
@@ -199,76 +218,21 @@ generate_mcp_json() {
       "command": "uvx",
       "args": ["mcp-neo4j-data-modeling@0.8.2", "--transport", "stdio"]
     },
-    "neo4j-cypher": {
-      "command": "uvx",
-      "args": ["mcp-neo4j-cypher@0.5.3"],
-      "env": {
-        "NEO4J_URI": "${NEO4J_URI}",
-        "NEO4J_USERNAME": "${NEO4J_USERNAME}",
-        "NEO4J_PASSWORD": "${NEO4J_PASSWORD}",
-        "NEO4J_DATABASE": "${NEO4J_DATABASE}"
-      }
-    },
     "neo4j-ingest": {
       "command": "uv",
-      "args": [
-        "--directory",
-        "${WORKSPACE_DIR}/mcp-neo4j-ingest",
-        "run",
-        "mcp-neo4j-ingest"
-      ],
-      "env": {
-        "NEO4J_URI": "${NEO4J_URI}",
-        "NEO4J_USERNAME": "${NEO4J_USERNAME}",
-        "NEO4J_PASSWORD": "${NEO4J_PASSWORD}",
-        "NEO4J_DATABASE": "${NEO4J_DATABASE}"
-      }
+      "args": ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-ingest", "run", "mcp-neo4j-ingest"]
     },
     "neo4j-lexical-graph": {
       "command": "uv",
-      "args": [
-        "--directory",
-        "${WORKSPACE_DIR}/mcp-neo4j-lexical-graph",
-        "run",
-        "mcp-neo4j-lexical-graph"
-      ],
-      "env": {
-        "NEO4J_URI": "${NEO4J_URI}",
-        "NEO4J_USERNAME": "${NEO4J_USERNAME}",
-        "NEO4J_PASSWORD": "${NEO4J_PASSWORD}",
-        "NEO4J_DATABASE": "${NEO4J_DATABASE}",
-        "OPENAI_API_KEY": "${OPENAI_API_KEY}",
-        "EMBEDDING_MODEL": "${EMBEDDING_MODEL}"
-      }
+      "args": ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-lexical-graph", "run", "mcp-neo4j-lexical-graph"]
     },
     "neo4j-entity-graph": {
       "command": "uv",
-      "args": [
-        "--directory",
-        "${WORKSPACE_DIR}/mcp-neo4j-entity-graph",
-        "run",
-        "mcp-neo4j-entity-graph"
-      ],
-      "env": {
-        "NEO4J_URI": "${NEO4J_URI}",
-        "NEO4J_USERNAME": "${NEO4J_USERNAME}",
-        "NEO4J_PASSWORD": "${NEO4J_PASSWORD}",
-        "NEO4J_DATABASE": "${NEO4J_DATABASE}",
-        "OPENAI_API_KEY": "${OPENAI_API_KEY}",
-        "EXTRACTION_MODEL": "${EXTRACTION_MODEL}"
-      }
+      "args": ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-entity-graph", "run", "mcp-neo4j-entity-graph"]
     },
     "neo4j-graphrag": {
-      "command": "uvx",
-      "args": ["mcp-neo4j-graphrag@0.3.0"],
-      "env": {
-        "NEO4J_URI": "${NEO4J_URI}",
-        "NEO4J_USERNAME": "${NEO4J_USERNAME}",
-        "NEO4J_PASSWORD": "${NEO4J_PASSWORD}",
-        "NEO4J_DATABASE": "${NEO4J_DATABASE}",
-        "OPENAI_API_KEY": "${OPENAI_API_KEY}",
-        "EMBEDDING_MODEL": "${EMBEDDING_MODEL}"
-      }
+      "command": "uv",
+      "args": ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-graphrag", "run", "mcp-neo4j-graphrag"]
     }${bigquery_block}
   }
 }

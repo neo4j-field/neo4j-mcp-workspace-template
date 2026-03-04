@@ -140,7 +140,7 @@ analytical_queries:
 
 ## Step 5: Validate
 
-- Use `neo4j-cypher` (`read_neo4j_cypher`) to execute the analytical Cypher queries
+- Use `neo4j-graphrag` (`read_neo4j_cypher`) to execute the analytical Cypher queries
 - Analyze results and ensure they address the original use cases
 - Note any gaps or issues
 
@@ -168,8 +168,7 @@ Present a final report to the user including:
 | Server | Purpose | Key Tools |
 |--------|---------|-----------|
 | `neo4j-data-modeling` | Schema design | `list_example_data_models`, `get_example_data_model`, `get_mermaid_config_str` |
-| `neo4j-cypher` | Read/write queries | `read_neo4j_cypher`, `write_neo4j_cypher` |
 | `neo4j-ingest` | CSV loading | `ingest_csv_to_neo4j` |
 | `neo4j-lexical-graph` | PDF → graph | `create_lexical_graph_from_pdf`, `create_chunk_embeddings`, `create_fulltext_index` |
 | `neo4j-entity-graph` | Entity extraction | `extract_entities_from_chunks`, `get_entity_extraction_status` |
-| `neo4j-graphrag` | RAG retrieval | `get_neo4j_schema_and_indexes`, `vector_search`, `fulltext_search`, `search_cypher_query` |
+| `neo4j-graphrag` | Read/write Cypher + RAG retrieval | `read_neo4j_cypher`, `write_neo4j_cypher`, `get_neo4j_schema_and_indexes`, `vector_search`, `fulltext_search`, `search_cypher_query` |
