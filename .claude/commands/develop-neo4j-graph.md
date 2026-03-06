@@ -66,7 +66,7 @@ Use the `neo4j-data-modeling` MCP server. Follow this process:
 - Make necessary changes and repeat step 2
 
 ### Final Data Model
-- When no more changes are needed, persist the data model as JSON in `data_models/`
+- When no more changes are needed, persist the data model as JSON in `outputs/data_models/`
 
 ---
 
@@ -103,7 +103,7 @@ Parse modes:
 ## Step 4: Generate Cypher for Use Cases
 
 - Each use case should have one or more Cypher queries that provide appropriate context
-- Persist Cypher queries in a YAML file using this format:
+- Persist Cypher queries as a YAML file in `outputs/queries/` using this format:
 
 ### YAML Format
 
@@ -160,6 +160,8 @@ Present a final report to the user including:
    - Unclear use cases
    - Other reasons
 6. **Summary** — current state of the application and recommended next steps
+
+Persist the report as a Markdown file in `outputs/reports/`.
 
 ---
 

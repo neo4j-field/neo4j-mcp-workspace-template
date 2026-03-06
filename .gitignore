@@ -213,5 +213,23 @@ __marimo__/
 .claude/settings.local.json
 mcp-neo4j-graphrag/
 
-data/pdf/
-data/csv/
+# Data inputs (user data, not committed)
+data/pdf/*
+data/csv/*
+!data/pdf/.gitkeep
+!data/csv/.gitkeep
+
+# Generated outputs (not committed, but folder structure is tracked)
+outputs/*
+!outputs/data_models/
+!outputs/queries/
+!outputs/reports/
+!outputs/schemas/
+outputs/data_models/*
+outputs/queries/*
+outputs/reports/*
+outputs/schemas/*
+!outputs/**/.gitkeep
+
+# Legacy data_models folder (replaced by outputs/data_models/)
+/data_models/
