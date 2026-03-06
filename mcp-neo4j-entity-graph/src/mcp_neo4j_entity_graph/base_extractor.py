@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
-import json as json_module
+import inspect
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Optional, Type
+from typing import Any, Optional, Type, Union, get_args, get_origin
 
 import litellm
 import structlog
@@ -24,9 +24,12 @@ from pydantic import BaseModel
 from .models import (
     ChunkExtractionResult,
     ClassifiedChunk,
+    EntityTypeSchema,
     ExtractionSchema,
     ExtractedEntity,
     ExtractedRelationship,
+    PropertySchema,
+    RelationshipTypeSchema,
 )
 
 logger = structlog.get_logger()
@@ -181,26 +184,89 @@ def load_extraction_output_model(pydantic_model_path: str) -> Type[BaseModel]:
     return module.ExtractionOutput
 
 
+def schema_from_pydantic_module(module: ModuleType) -> ExtractionSchema:
+    """Reconstruct an ExtractionSchema by introspecting a generated .py module.
+
+    Reads ClassVars (_node_label, _key_property, _relationship_type, etc.) and
+    model_fields from entity/relationship model classes. Used for pydantic-only mode
+    so no JSON schema file is required.
+    """
+
+    def _unwrap_optional(annotation: Any) -> Any:
+        """Unwrap Optional[X] -> X, leave other types as-is."""
+        if get_origin(annotation) is Union:
+            args = [a for a in get_args(annotation) if a is not type(None)]
+            return args[0] if args else str
+        return annotation
+
+    def _python_to_neo4j_type(annotation: Any) -> str:
+        annotation = _unwrap_optional(annotation)
+        return {int: "INTEGER", float: "FLOAT", bool: "BOOLEAN"}.get(annotation, "STRING")
+
+    entity_types: list[EntityTypeSchema] = []
+    relationship_types: list[RelationshipTypeSchema] = []
+
+    for _, cls in inspect.getmembers(module, inspect.isclass):
+        if not (isinstance(cls, type) and issubclass(cls, BaseModel) and cls is not BaseModel):
+            continue
+
+        if hasattr(cls, "_node_label"):
+            key_prop = cls._key_property  # type: ignore[attr-defined]
+            properties = [
+                PropertySchema(
+                    name=fname,
+                    type=_python_to_neo4j_type(finfo.annotation),
+                    description=finfo.description,
+                    required=finfo.is_required(),
+                )
+                for fname, finfo in cls.model_fields.items()
+            ]
+            entity_types.append(EntityTypeSchema(
+                label=cls._node_label,  # type: ignore[attr-defined]
+                description=(cls.__doc__ or f"A {cls._node_label} entity").strip(),
+                key_property=key_prop,
+                properties=properties,
+            ))
+
+        elif hasattr(cls, "_relationship_type"):
+            # Relationship properties are the optional fields; required fields are endpoint keys
+            rel_properties = [
+                PropertySchema(
+                    name=fname,
+                    type=_python_to_neo4j_type(finfo.annotation),
+                    description=finfo.description,
+                )
+                for fname, finfo in cls.model_fields.items()
+                if not finfo.is_required()
+            ]
+            source_entity = cls._start_node_label  # type: ignore[attr-defined]
+            target_entity = cls._end_node_label  # type: ignore[attr-defined]
+            relationship_types.append(RelationshipTypeSchema(
+                type=cls._relationship_type,  # type: ignore[attr-defined]
+                description=(cls.__doc__ or f"{source_entity} to {target_entity}").strip(),
+                source_entity=source_entity,
+                target_entity=target_entity,
+                properties=rel_properties,
+            ))
+
+    if not entity_types:
+        raise ValueError("No entity model classes found in module (expected classes with _node_label ClassVar)")
+
+    return ExtractionSchema(entity_types=entity_types, relationship_types=relationship_types)
+
+
 def parse_extraction_response(
     content: str,
     schema: ExtractionSchema,
     chunk_id: str,
-    output_model: Optional[Type[BaseModel]] = None,
+    output_model: Type[BaseModel],
 ) -> ChunkExtractionResult:
-    """Parse LLM response into ChunkExtractionResult.
-
-    If output_model is provided (strongly typed), it parses into that model
-    and converts to our internal format using ClassVar metadata.
-    Otherwise, falls back to generic parsing.
-    """
+    """Parse LLM response into ChunkExtractionResult using the strongly-typed Pydantic model."""
     if not content:
         return ChunkExtractionResult(chunk_id=chunk_id)
 
     try:
-        if output_model is not None:
-            return _parse_typed_response(content, schema, chunk_id, output_model)
-        else:
-            return _parse_generic_response(content, schema, chunk_id)
+        return _parse_typed_response(content, schema, chunk_id, output_model)
     except Exception as e:
         logger.error(
             "Failed to parse extraction response",
@@ -283,55 +349,6 @@ def _parse_typed_response(
                                 properties=rel_props,
                             )
                         )
-
-    return ChunkExtractionResult(
-        chunk_id=chunk_id,
-        entities=entities,
-        relationships=relationships,
-    )
-
-
-def _parse_generic_response(
-    content: str,
-    schema: ExtractionSchema,
-    chunk_id: str,
-) -> ChunkExtractionResult:
-    """Fallback parser when no typed model is available.
-
-    Expects the generic ExtractionOutput format with label + properties_json.
-    """
-    data = json_module.loads(content)
-
-    entities: list[ExtractedEntity] = []
-    relationships: list[ExtractedRelationship] = []
-
-    for e in data.get("entities", []):
-        label = e.get("label", "")
-        props_raw = e.get("properties_json", "{}")
-        try:
-            props = json_module.loads(props_raw) if isinstance(props_raw, str) else props_raw
-        except json_module.JSONDecodeError:
-            props = {"raw": props_raw}
-
-        entity_schema = schema.get_entity_schema(label)
-        if entity_schema:
-            key_prop = entity_schema.key_property
-            if key_prop in props and isinstance(props[key_prop], str):
-                props[key_prop] = props[key_prop].strip()
-
-        entities.append(ExtractedEntity(label=label, properties=props))
-
-    for r in data.get("relationships", []):
-        relationships.append(
-            ExtractedRelationship(
-                type=r.get("type", ""),
-                source_label=r.get("source_label", ""),
-                source_key=str(r.get("source_key", "")).strip(),
-                target_label=r.get("target_label", ""),
-                target_key=str(r.get("target_key", "")).strip(),
-                properties=r.get("properties", {}),
-            )
-        )
 
     return ChunkExtractionResult(
         chunk_id=chunk_id,

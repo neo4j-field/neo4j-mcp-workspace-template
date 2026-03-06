@@ -11,6 +11,7 @@ from .base_extractor import (
     build_system_prompt,
     parse_extraction_response,
     load_extraction_output_model,
+    schema_from_pydantic_module,
 )
 from .text_extractor import TextExtractor
 from .vlm_extractor import VlmExtractor
@@ -20,6 +21,7 @@ __all__ = [
     "build_system_prompt",
     "parse_extraction_response",
     "load_extraction_output_model",
+    "schema_from_pydantic_module",
     "TextExtractor",
     "VlmExtractor",
 ]

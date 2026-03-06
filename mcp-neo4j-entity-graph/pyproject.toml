@@ -1,6 +1,6 @@
 [project]
 name = "mcp-neo4j-entity-graph"
-version = "0.2.0"
+version = "0.3.0"
 description = "MCP server for extracting entities from text chunks and creating entity graphs in Neo4j. Supports 100+ LLM providers via LiteLLM."
 readme = "README.md"
 requires-python = ">=3.10"
