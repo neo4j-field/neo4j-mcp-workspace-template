@@ -69,20 +69,20 @@ Five MCP servers are configured for this workspace:
 
 ### `neo4j-ingest`
 - **Purpose:** Load structured CSV data into Neo4j using parameterized Cypher
-- **Key tools:** `ingest_csv_to_neo4j`
+- **Key tools:** `ingest_csv_into_neo4j`
 - **Required env:** none in mcp.json — reads from `.env` via python-dotenv
 - **Source:** local `mcp-neo4j-ingest/` (requires `uv sync`)
 
 ### `neo4j-lexical-graph`
 - **Purpose:** Parse PDFs into a searchable graph with chunk nodes and embeddings
-- **Key tools:** `create_lexical_graph_from_pdf`, `create_lexical_graph_from_folder`, `create_chunk_embeddings`, `create_fulltext_index`
+- **Key tools:** `create_lexical_graph`, `embed_chunks` (also creates fulltext index by default), `generate_chunk_descriptions`, `assign_section_hierarchy`, `verify_lexical_graph`, `list_documents`
 - **Parse modes:** `pymupdf` (default), `docling`, `page_image`, `vlm_blocks`
 - **Required env:** none in mcp.json — reads from `.env` via python-dotenv
 - **Source:** local `mcp-neo4j-lexical-graph/` (requires `uv sync`)
 
 ### `neo4j-entity-graph`
 - **Purpose:** Extract structured entities from lexical graph Chunk nodes using LLM
-- **Key tools:** `extract_entities_from_chunks`, `get_entity_extraction_status`
+- **Key tools:** `extract_entities`, `check_extraction_status`, `cancel_extraction`
 - **Provider:** Any LiteLLM-compatible provider (100+ supported)
 - **Processing:** Async background — use status tool to monitor
 - **Required env:** none in mcp.json — reads from `.env` via python-dotenv
@@ -144,7 +144,7 @@ Discover → confirm questions → model → lexical graph → schema + validato
 | CSV ingestion fails with "file not found" | Relative path used; absolute path required | Use full path: `/path/to/file.csv` |
 | MCP tools not found in session | `.mcp.json` or `.cursor/mcp.json` missing, or IDE not restarted | Run `./setup.sh`, then restart IDE/Claude Code |
 | `uv` command not found | uv not installed | See https://docs.astral.sh/uv/getting-started/installation/ |
-| Entity extraction is slow / appears stuck | Background async processing | Call `get_entity_extraction_status` to check progress |
+| Entity extraction is slow / appears stuck | Background async processing | Call `check_extraction_status` to check progress |
 
 ---
 

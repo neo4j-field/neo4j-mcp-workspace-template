@@ -55,7 +55,7 @@ Parses PDFs into a searchable graph with `Document` and `Chunk` nodes, vector em
 - `pymupdf` — fast text extraction (default)
 - `docling` — structural layout detection
 - `page_image` — vision model per page
-- `vlm_blocks` — vision model per layout block (highest quality)
+- `vlm_blocks` — pymupdf + VLM block classification (faster than docling, experimental)
 
 - **Server:** `mcp-neo4j-lexical-graph` (local — `mcp-neo4j-lexical-graph/`)
 - **Required credentials:** Neo4j connection vars + LLM API key + `EMBEDDING_MODEL`
@@ -92,17 +92,19 @@ brew install mcp-toolbox
 4. **Query** — generate Cypher for each use case
 5. **Validate** — run queries and verify results address the use cases
 
-### Unstructured data (PDF)
+### Unstructured data (PDF) — use `/build-pdf-chatbot`
 
-1. **Discovery** — review PDFs; identify entities and use cases
-2. **Lexical Graph** — parse PDFs into chunks with the Lexical Graph server
-3. **Embed** — generate vector embeddings for semantic search
-4. **Entity Graph** — extract entities from chunks with the Entity Graph server
-5. **Model** — design a graph data model based on extracted entities
-6. **Query** — generate Cypher for each use case
-7. **Validate** — run queries and verify results
+1. **Discovery** — review PDFs; select parse mode based on document type
+2. **Use case** — confirm target questions the chatbot should answer
+3. **Model** — design a graph data model with the Data Modeling server
+4. **Lexical Graph** — parse PDFs into chunks, embed, and index
+5. **Schema + validators** — export extraction schema and review Pydantic validators
+6. **Entity Graph** — extract structured entities from chunks
+7. **Q&A** — answer confirmed questions using vector/fulltext/Cypher search
+8. **Report** — save results to `outputs/reports/`
 
-Run `/develop-neo4j-graph` (Cursor skill or Claude Code slash command) for the full guided workflow.
+Run `/build-pdf-chatbot` (Claude Code) for the full guided PDF workflow.
+Run `/develop-neo4j-graph` for a general CSV + PDF workflow.
 
 ---
 
@@ -174,10 +176,16 @@ neo4j-mcp-workspace-template/
 ├── setup.sh                        # One-time setup script
 ├── .env.example                    # Documents all environment variables
 ├── CLAUDE.md                       # Claude Code agent context
-├── data/                           # Sample data
-│   ├── csv/                        # Structured data (gitignored)
-│   └── pdf/                        # PDF documents (gitignored)
-├── data_models/                    # Persisted graph data model JSON
+├── data/                           # Input data (gitignored contents, tracked structure)
+│   ├── csv/                        # Structured data
+│   └── pdf/                        # PDF documents
+├── outputs/                        # Generated outputs (gitignored contents, tracked structure)
+│   ├── data_models/                # Graph data model JSON files
+│   ├── queries/                    # Cypher query YAML files
+│   ├── reports/                    # Markdown reports
+│   └── schemas/                    # Pydantic extraction schema files
+├── demo/                           # Demo data scripts and reference outputs (committed)
+│   └── expected/                   # Reference outputs for comparison
 ├── mcp-neo4j-ingest/               # Local ingest MCP server
 ├── mcp-neo4j-lexical-graph/        # Local lexical graph MCP server
 ├── mcp-neo4j-entity-graph/         # Local entity graph MCP server
@@ -191,6 +199,7 @@ neo4j-mcp-workspace-template/
 │       └── setup-workspace/        # Validation skill
 └── .claude/
     └── commands/
+        ├── build-pdf-chatbot.md    # /build-pdf-chatbot slash command
         ├── develop-neo4j-graph.md  # /develop-neo4j-graph slash command
         └── setup-workspace.md      # /setup-workspace slash command
 ```

@@ -231,5 +231,3 @@ outputs/reports/*
 outputs/schemas/*
 !outputs/**/.gitkeep
 
-# Legacy data_models folder (replaced by outputs/data_models/)
-/data_models/
