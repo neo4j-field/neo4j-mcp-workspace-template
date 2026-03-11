@@ -4,38 +4,36 @@
 
 ---
 
-## Current Status (as of 2026-03-06)
+## Current Status (as of 2026-03-11)
 
-We are in the **testing and refinement phase**. The workspace structure and PDF chatbot skill are built and committed. We have run one partial test with Bayer pharmaceutical pipeline PDFs (page_image mode) and used the results to fix several skill bugs. The skill is now ready for a clean full run.
+We are in the **testing and refinement phase**. Two full `page_image` test runs have been completed and evaluated. The third test (pymupdf mode) is next.
 
 ---
 
 ## In Progress
 
-- [ ] **PDF page_image — clean full run** using `build-pdf-chatbot` skill
-  - PDFs are in `data/pdf/`: Bayer pharmaceutical pipeline slides (2 files)
-  - Previous run exposed bugs, all fixed — needs fresh session to validate
-  - After run: execute `/dev/evaluate-pipeline` to produce improvement report
+_(nothing — ready for next test run)_
 
 ---
 
 ## Todo
 
 ### Testing
-- [ ] PDF `pymupdf` mode — text-heavy PDF, clean run + evaluate
-- [ ] PDF `docling` mode — structured/tabular PDF, clean run + evaluate
+- [x] **Second evaluation** — `/dev:evaluate-pipeline` completed for 5-company run
+  - Report: `outputs/reports/pharma_pipeline_5company_evaluation.md`
+- [ ] PDF `pymupdf` mode — text-heavy PDF (annual report / 10-K pipeline section), clean run + evaluate
+  - Goal: verify TARGETS and HAS_MOA work in prose mode
+- [ ] PDF `docling` mode — tabular PDF (pipeline detail table), clean run + evaluate
 - [ ] PDF `vlm_blocks` mode — mixed content, clean run + evaluate
 - [ ] CSV — test `develop-neo4j-graph` skill end-to-end
 - [ ] PDF + CSV combined — entity graph linking both data types
 
-### Quick fixes (do before next test session)
-- [ ] Fix stale tool names in `CLAUDE.md` MCP server reference section
-  - `create_lexical_graph_from_pdf` → `create_lexical_graph`
-  - `create_chunk_embeddings` → `embed_chunks`
-  - `create_fulltext_index` → covered by `embed_chunks` default
-  - `extract_entities_from_chunks` → `extract_entities`
-  - `get_entity_extraction_status` → `check_extraction_status`
-- [ ] Update `README.md` for new `outputs/` structure and new skills
+### Skill / server improvements identified (from run 1 evaluation)
+- [ ] Add `relationships_only` pass trigger to Step 7 of `build-pdf-chatbot` skill
+  - Currently blocked: `pass_type="relationships_only"` not implemented in entity-graph v1
+- [ ] Update skill Step 8 to pre-fetch vector index name via `get_neo4j_schema_and_indexes`
+- [ ] Remove `check_processing_status` after `embed_chunks` from skill (synchronous tool)
+- [ ] Add `.strip().lower()` validator to `DrugCandidate.name` in schema (soft duplicate fix)
 
 ### Demo data + automated testing
 - [ ] Choose best validated dataset from testing as the demo example
@@ -58,17 +56,33 @@ We are in the **testing and refinement phase**. The workspace structure and PDF 
 - [x] Created `build-pdf-chatbot` Claude command (`.claude/commands/build-pdf-chatbot.md`)
 - [x] Created `dev/evaluate-pipeline` Claude command (`.claude/commands/dev/evaluate-pipeline.md`)
 - [x] Updated `develop-neo4j-graph` command — output paths updated to `outputs/`
-- [x] Updated `CLAUDE.md` — new structure and workflow sections
-- [x] Fixed skill bugs from first test run:
-  - Read tool (not MCP) for PDF discovery
-  - `generate_chunk_descriptions` mandatory before `embed_chunks` for `page_image` mode
-  - Removed redundant manual `CREATE FULLTEXT INDEX` step
-  - `MENTIONED_IN` → `EXTRACTED_FROM`
-  - `verify_lexical_graph` not useful for `page_image` mode (5.8MB base64) — use `list_documents` + `read_node_image` instead
-- [x] Confirmed `read_node_image` available in graphrag server + code up to date
+- [x] Updated `CLAUDE.md` — fixed stale tool names, new structure and workflow sections
+- [x] Updated `README.md` — new `outputs/` structure, fixed vlm_blocks description
+- [x] Deleted legacy `data_models/` folder
+- [x] **Run 1: 2-company page_image test** (Pfizer + Bayer)
+  - 601 unique entities, 842 relationships
+  - Gap: TARGETS=0, HAS_MOA=9
+  - Report: `outputs/reports/pharma_pipeline_chatbot_report.md`
+  - Evaluation: `outputs/reports/pharma_pipeline_evaluation.md`
+- [x] **Run 2: 5-company page_image test** (Pfizer, Bayer, AbbVie, BMS, J&J)
+  - 1596 unique entities, 1807 relationships from 102 chunks
+  - Gap: TARGETS=3, HAS_MOA=13, J&J IN_PHASE=0
+  - `pass_type="relationships_only"` not yet implemented in entity-graph v1
+  - Report: `outputs/reports/pharma_pipeline_5company_chatbot_report.md`
 - [x] Committed and pushed all changes to GitHub
 
 ---
+
+## Key Findings Across Runs
+
+| Issue | Run 1 | Run 2 | Root cause |
+|-------|-------|-------|------------|
+| TARGETS | 0 | 3 | Pipeline tables encode drug→indication spatially, not in prose |
+| HAS_MOA | 9 | 13 | Same — MOA in table column, not sentence structure |
+| Bayer Registration | 0 in graph | 0 in graph | Misattribution from Pfizer-first slide context |
+| J&J IN_PHASE | N/A | 0 | J&J slide layout not captured as explicit phase relationships |
+| Soft duplicates | None | Camzyos/CAMZYOS etc. | DrugCandidate.name lacks .lower() normalizer |
+| COMBINED_WITH | N/A (new) | 33 (BMS only) | BMS appendix has explicit combination columns; others don't |
 
 ## Key Files
 
@@ -77,10 +91,8 @@ We are in the **testing and refinement phase**. The workspace structure and PDF 
 | `.claude/commands/build-pdf-chatbot.md` | Main PDF chatbot skill |
 | `.claude/commands/develop-neo4j-graph.md` | General CSV+PDF skill |
 | `.claude/commands/dev/evaluate-pipeline.md` | Post-run evaluation tool |
-| `outputs/data_models/` | Generated graph data model JSON |
-| `outputs/queries/` | Generated Cypher YAML |
-| `outputs/reports/` | Generated markdown reports |
-| `outputs/schemas/` | Pydantic extraction schemas |
-| `data/pdf/` | Input PDFs (gitignored) |
-| `data/csv/` | Input CSVs (gitignored) |
-| `demo/` | Demo data scripts and reference outputs |
+| `outputs/data_models/pharma_pipeline_data_model.json` | 5-company graph model with COMBINED_WITH |
+| `outputs/schemas/pharma_pipeline_schema.py` | Pydantic schema with 5-company Literals |
+| `outputs/reports/pharma_pipeline_chatbot_report.md` | Run 1 (2-company) chatbot report |
+| `outputs/reports/pharma_pipeline_evaluation.md` | Run 1 evaluation report |
+| `outputs/reports/pharma_pipeline_5company_chatbot_report.md` | Run 2 (5-company) chatbot report |
