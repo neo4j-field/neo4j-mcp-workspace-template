@@ -137,6 +137,8 @@ if [ ! -d "$GRAPHRAG_DIR" ]; then
   fi
   info "Cloning mcp-neo4j-graphrag..."
   git clone --depth 1 https://github.com/neo4j-field/mcp-neo4j-graphrag "$GRAPHRAG_DIR" --quiet
+  # Pin to Python 3.12 — grpcio has no pre-built wheels for Python 3.13+ on arm64 yet
+  echo "3.12" > "$GRAPHRAG_DIR/.python-version"
   success "mcp-neo4j-graphrag cloned"
 else
   info "mcp-neo4j-graphrag already present, skipping clone"
