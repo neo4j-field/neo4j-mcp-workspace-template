@@ -29,7 +29,7 @@ Then open the IDE:
 - **[uv](https://docs.astral.sh/uv/getting-started/installation/)** — fast Python package manager
 - **Neo4j 2025.01+** — required for native `VECTOR` type used by lexical-graph
   - [Neo4j Desktop](https://neo4j.com/download/) or [AuraDB](https://neo4j.com/cloud/platform/aura-graph-database/)
-- **LLM API key** — for embedding generation and entity extraction (OpenAI or Anthropic)
+- **LLM provider** — for embedding generation and entity extraction (see [LLM Configuration](#llm-configuration) below)
 - **Google MCP Toolbox** (optional) — only if using BigQuery as a data source
 
 ---
@@ -105,6 +105,67 @@ brew install mcp-toolbox
 
 Run `/build-pdf-chatbot` (Claude Code) for the full guided PDF workflow.
 Run `/develop-neo4j-graph` for a general CSV + PDF workflow.
+
+---
+
+## LLM Configuration
+
+Both `EMBEDDING_MODEL` and `EXTRACTION_MODEL` accept any [LiteLLM-compatible](https://docs.litellm.ai/docs/providers) model string. The defaults use OpenAI, but you can swap to any provider — including local models via Ollama — by editing two lines in `.env`.
+
+### Default (OpenAI)
+
+```env
+EMBEDDING_MODEL=text-embedding-3-small
+EXTRACTION_MODEL=gpt-5-mini
+```
+
+Fast, high quality, requires an OpenAI API key.
+
+### Local models via Ollama
+
+Run models entirely on your own hardware — no API key needed. Install [Ollama](https://ollama.com), pull the models, then update `.env`:
+
+```env
+EMBEDDING_MODEL=ollama/nomic-embed-text
+EXTRACTION_MODEL=ollama/qwen3:8b
+```
+
+```bash
+ollama pull nomic-embed-text
+ollama pull qwen3:8b
+```
+
+**Recommended local models:**
+
+| Use case | Model | Size | Notes |
+|----------|-------|------|-------|
+| Embeddings | `nomic-embed-text` | 274 MB | 768-dim, good retrieval quality |
+| Text extraction | `qwen3:8b` | 5.2 GB | Best quality/speed balance for entity extraction |
+| Text extraction (lighter) | `phi4-mini` | 2.5 GB | Faster, lower relationship recall (~75% vs 100%) |
+| Vision extraction | `qwen3.5:9b` | 6.6 GB | For `page_image` parse mode on slides/diagrams |
+
+**Tradeoffs vs cloud models:**
+
+- **Speed:** Local extraction runs sequentially (Ollama default: 1 concurrent request). Expect ~5-25s per chunk depending on model size and GPU — a 100-chunk document takes 15-45 minutes vs ~2 minutes with `gpt-5-mini` at 20 parallel calls.
+- **Parallelism:** You can increase `OLLAMA_NUM_PARALLEL` (e.g. `launchctl setenv OLLAMA_NUM_PARALLEL 4` on macOS) to process more chunks simultaneously, but on a single GPU this splits bandwidth rather than multiplying throughput — total time stays similar.
+- **Quality:** `qwen3:8b` matches cloud models on entity and relationship extraction for structured schemas. `phi4-mini` is good for entities but misses ~25% of relationships on complex sentence structures.
+- **Vision:** `qwen3.5:9b` supports vision for `page_image` mode. Disable thinking mode by setting `extra_body={"think": false}` (handled automatically by the entity-graph server). Expect ~80s per page vs ~5s with `gpt-4o`.
+- **Embedding dimensions:** `nomic-embed-text` produces 768-dim vectors vs 1536 for `text-embedding-3-small`. If you switch embedding models on an existing graph, drop and recreate the vector index.
+
+### Other providers
+
+Any LiteLLM provider works. Examples:
+
+```env
+# Anthropic
+EXTRACTION_MODEL=claude-haiku-4-5-20251001
+
+# Azure OpenAI
+EXTRACTION_MODEL=azure/gpt-4o-mini
+
+# Google
+EXTRACTION_MODEL=gemini/gemini-2.0-flash
+```
 
 ---
 
