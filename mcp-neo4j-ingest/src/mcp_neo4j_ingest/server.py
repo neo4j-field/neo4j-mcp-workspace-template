@@ -55,6 +55,11 @@ async def setup():
                                  )
     ingest_mcp.add_tool(ingest_tool)
 
+    # write cypher tool to execute post processing cypher queries when necessary
+    ingest_write_tool = Tool.from_tool(write_tool, name="execute_write_cypher_query")
+
+    ingest_mcp.add_tool(ingest_write_tool)
+
 async def run():
     await setup()
     await ingest_mcp.run_stdio_async()

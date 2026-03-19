@@ -1,0 +1,25 @@
+---
+config:
+    layout: elk
+    elk:
+        nodePlacementStrategy: BRANDES_KOEPF    
+---
+flowchart LR
+    A(Discovery & Use Cases) 
+
+    subgraph RL["Refinement Loop"]
+        B(Data Model Creation)
+        B --> C(Ingestion)
+        D -- "Corrections" --> B
+        C --> D(Query Validation)
+    end
+    
+    A-->B
+    D --> E(Final Report)
+
+    style A fill:#1a1a2e,stroke:#4a90d9,color:#e0e0e0
+    style B fill:#1a1a2e,stroke:#4a90d9,color:#e0e0e0
+    style C fill:#1a1a2e,stroke:#4a90d9,color:#e0e0e0
+    style D fill:#1a1a2e,stroke:#4a90d9,color:#e0e0e0
+    style E fill:#1a1a2e,stroke:#4a90d9,color:#e0e0e0
+    style RL fill:#d0d0d0,stroke:#888888,color:#000000

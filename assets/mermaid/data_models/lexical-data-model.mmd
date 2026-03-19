@@ -1,0 +1,19 @@
+---
+config:
+    layout: elk
+    elk:
+        nodePlacementStrategy: BRANDES_KOEPF    
+---
+
+graph LR
+    Chunk(Chunk)
+    Doc(Document) -->|HAS_PAGE| Page
+    Doc -->|HAS_ELEMENT| Img(Image)
+    Doc -->|HAS_ELEMENT| Tbl(Table)
+    Doc -->|HAS_SECTION| Sec(Section)
+    Sec -->|HAS_SUBSECTION| Sec
+    Chunk -->|PART_OF| Doc
+    Chunk -->|NEXT_CHUNK| Chunk
+    Chunk -->|HAS_ELEMENT| Img
+    Chunk -->|HAS_ELEMENT| Tbl
+    Page -->|NEXT_PAGE| Page

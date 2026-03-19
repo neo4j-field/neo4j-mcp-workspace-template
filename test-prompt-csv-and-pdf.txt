@@ -1,0 +1,6 @@
+I am building an application with Neo4j based on PubMed documents and patient journey data. 
+My patient journey structured data is in data/csv/
+My PubMed research articles are in data/pdf/
+I would like to track patient journeys and identify treatment patterns that have positive outcomes.
+These treatment patterns may then be used for patients in similar demographics.
+This should connect patients with pertinent research.
