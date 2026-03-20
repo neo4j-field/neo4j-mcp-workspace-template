@@ -90,13 +90,21 @@ Always use absolute paths. Use `ingest_csv_into_neo4j`.
 
 ### PDF data — `neo4j-lexical-graph`
 
-Reference [HANDLE_UNSTRUCTURED_DATA.md](./references/HANDLE_UNSTRUCTURED_DATA.md) for the full required tool sequence. Summary of required steps:
+Reference [HANDLE_UNSTRUCTURED_DATA.md](./references/HANDLE_UNSTRUCTURED_DATA.md) for the full per-mode tool sequence. Summary:
 
-1. `create_lexical_graph` — parse PDFs into document/element nodes
-2. `chunk_lexical_graph` — **required for `docling`, `vlm_blocks`, `page_image` modes** (not needed for `pymupdf`)
-3. `list_documents` — verify all PDFs ingested, get document IDs
-4. `generate_chunk_descriptions` — **required before `embed_chunks` for `page_image` mode** (optional for others)
-5. `embed_chunks` — creates vector embeddings + fulltext index (synchronous, no status poll needed)
+| Step | Tool | pymupdf | docling | page_image | vlm_blocks |
+|------|------|---------|---------|------------|------------|
+| 1 | `create_lexical_graph` | ✓ required | ✓ required | ✓ required | ✓ required |
+| 2 | `chunk_lexical_graph` | ✗ skip | ✓ required | ✓ required | ✓ required |
+| 3 | `list_documents` | ✓ required | ✓ required | ✓ required | ✓ required |
+| 4 | `verify_lexical_graph` | optional | optional | ✗ never | optional |
+| 5 | `assign_section_hierarchy` | ✗ skip | optional | ✗ skip | optional |
+| 6 | `generate_chunk_descriptions` | recommended if images/tables | recommended if images/tables | **✓ REQUIRED** | recommended if images/tables |
+| 7 | `embed_chunks` | ✓ required | ✓ required | ✓ required | ✓ required |
+
+**`generate_chunk_descriptions` — call without `document_id`** to run for all active documents at once.
+
+**`embed_chunks` — call with no parameters.** The tool auto-detects whether `generate_chunk_descriptions` was run and selects the right embedding strategy (VLM descriptions for Table/Image/Page nodes, raw text for others — all in one unified index). The output reports `auto_detected_fallback=true` when this happens.
 
 ---
 

@@ -55,12 +55,15 @@ Loads structured CSV data into Neo4j using parameterized Cypher queries generate
 
 ### Lexical Graph
 
-Parses PDFs into a searchable graph with `Document` and `Chunk` nodes, vector embeddings, and fulltext indexes. Supports 4 parse modes:
+Parses PDFs into a searchable graph with `Document`, `Chunk`, and optional `Image`/`Table`/`Section`/`Page` nodes, vector embeddings, and fulltext indexes. Supports 4 parse modes:
 
-- `pymupdf` — fast text extraction (default)
-- `docling` — structural layout detection
-- `page_image` — vision model per page
+- `pymupdf` — fast text extraction + optional image/table capture (default)
+- `docling` — full layout detection with sections, tables, captions
+- `page_image` — vision model per page (slides, diagrams, visual-heavy docs)
 - `vlm_blocks` — pymupdf + VLM block classification (faster than docling, experimental)
+
+Tools must be called in a specific order depending on the parse mode. See `mcp-neo4j-lexical-graph/README.md` for the full workflow table.
+
 - **Server:** `mcp-neo4j-lexical-graph` (local — `mcp-neo4j-lexical-graph/`)
 - **Required credentials:** Neo4j connection vars + LLM API key + `EMBEDDING_MODEL`
 
@@ -99,19 +102,18 @@ brew install mcp-toolbox
 4. **Query** — generate Cypher for each use case
 5. **Validate** — run queries and verify results address the use cases
 
-### Unstructured data (PDF) — use `/build-pdf-chatbot`
+### Unstructured data (PDF) — use `/develop-neo4j-graph`
 
 1. **Discovery** — review PDFs; select parse mode based on document type
-2. **Use case** — confirm target questions the chatbot should answer
+2. **Use case** — infer CHATBOT or ANALYTICAL mode from use case description
 3. **Model** — design a graph data model with the Data Modeling server
-4. **Lexical Graph** — parse PDFs into chunks, embed, and index
+4. **Lexical Graph** — parse PDFs, chunk (if needed), generate descriptions (if images/tables), embed
 5. **Schema + validators** — export extraction schema and review Pydantic validators
 6. **Entity Graph** — extract structured entities from chunks
-7. **Q&A** — answer confirmed questions using vector/fulltext/Cypher search
+7. **Q&A / Analysis** — answer questions (CHATBOT) or generate Cypher reports (ANALYTICAL)
 8. **Report** — save results to `outputs/reports/`
 
-Run `/build-pdf-chatbot` (Claude Code) for the full guided PDF workflow.
-Run `/develop-neo4j-graph` for a general CSV + PDF workflow.
+Use `/develop-neo4j-graph` for the full guided workflow (CSV + PDF, CHATBOT or ANALYTICAL mode).
 
 ---
 
@@ -260,14 +262,11 @@ neo4j-mcp-workspace-template/
 ├── .mcp.json                       # Generated (gitignored) — Claude Code MCP config
 ├── .cursor/
 │   ├── mcp.json                    # Generated (gitignored) — Cursor MCP config
-│   ├── mcp.json.example            # Template for manual setup
-│   └── skills/
-│       ├── develop-neo4j-graph/    # Full workflow skill
-│       └── setup-workspace/        # Validation skill
+│   └── mcp.json.example            # Template for manual setup
 └── .claude/
-    └── commands/
-        ├── build-pdf-chatbot.md    # /build-pdf-chatbot slash command
-        ├── develop-neo4j-graph.md  # /develop-neo4j-graph slash command
-        └── setup-workspace.md      # /setup-workspace slash command
+    └── skills/
+        ├── develop-neo4j-graph/    # /develop-neo4j-graph skill (CSV + PDF, CHATBOT + ANALYTICAL modes)
+        ├── setup-workspace/        # /setup-workspace validation skill
+        └── dev/evaluate-pipeline/  # /dev:evaluate-pipeline skill
 ```
 
