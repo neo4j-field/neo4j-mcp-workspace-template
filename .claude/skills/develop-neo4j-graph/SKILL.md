@@ -90,21 +90,27 @@ Always use absolute paths. Use `ingest_csv_into_neo4j`.
 
 ### PDF data — `neo4j-lexical-graph`
 
-Reference [HANDLE_UNSTRUCTURED_DATA.md](./references/HANDLE_UNSTRUCTURED_DATA.md) for the full per-mode tool sequence. Summary:
+Load the mode-specific reference file for the exact tool sequence:
+- **pymupdf** → [PYMUPDF_MODE.md](./references/PYMUPDF_MODE.md)
+- **docling** → [DOCLING_MODE.md](./references/DOCLING_MODE.md)
+- **page_image** → [PAGE_IMAGE_MODE.md](./references/PAGE_IMAGE_MODE.md)
+- **vlm_blocks** → [VLM_BLOCKS_MODE.md](./references/VLM_BLOCKS_MODE.md)
+
+Quick reference (all modes):
 
 | Step | Tool | pymupdf | docling | page_image | vlm_blocks |
 |------|------|---------|---------|------------|------------|
-| 1 | `create_lexical_graph` | ✓ required | ✓ required | ✓ required | ✓ required |
-| 2 | `chunk_lexical_graph` | ✗ skip | ✓ required | ✓ required | ✓ required |
-| 3 | `list_documents` | ✓ required | ✓ required | ✓ required | ✓ required |
+| 1 | `create_lexical_graph` | ✓ | ✓ | ✓ | ✓ |
+| 2 | `chunk_lexical_graph` | ✗ skip | ✓ | ✓ | ✓ |
+| 3 | `list_documents` | ✓ | ✓ | ✓ | ✓ |
 | 4 | `verify_lexical_graph` | optional | optional | ✗ never | optional |
 | 5 | `assign_section_hierarchy` | ✗ skip | optional | ✗ skip | optional |
-| 6 | `generate_chunk_descriptions` | recommended if images/tables | recommended if images/tables | **✓ REQUIRED** | recommended if images/tables |
-| 7 | `embed_chunks` | ✓ required | ✓ required | ✓ required | ✓ required |
+| 6 | `generate_chunk_descriptions` | if images/tables | if images/tables | **required** | if images/tables |
+| 7 | `embed_chunks` | ✓ | ✓ | ✓ | ✓ |
 
 **`generate_chunk_descriptions` — call without `document_id`** to run for all active documents at once.
 
-**`embed_chunks` — call with no parameters.** The tool auto-detects whether `generate_chunk_descriptions` was run and selects the right embedding strategy (VLM descriptions for Table/Image/Page nodes, raw text for others — all in one unified index). The output reports `auto_detected_fallback=true` when this happens.
+**`embed_chunks` — call with no parameters.** Auto-detects `textDescription` and applies the right embedding strategy (VLM descriptions for Table/Image/Page nodes, raw text for others — all in one unified index).
 
 ---
 
