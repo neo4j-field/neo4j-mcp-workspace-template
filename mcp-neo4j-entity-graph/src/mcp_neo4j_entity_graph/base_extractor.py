@@ -375,4 +375,12 @@ def build_llm_params(
     else:
         params["temperature"] = 0.0
 
+    # Ollama-specific: disable thinking mode and cap context window.
+    # Thinking models (qwen3.5, deepseek-r1, etc.) route output to reasoning_content,
+    # leaving content empty — structured output silently returns no entities.
+    # Default num_ctx for some models is 262k, which pre-allocates a huge KV cache;
+    # 8192 is more than enough for chunk extraction (typical chunks are 200-500 tokens).
+    if model_lower.startswith("ollama/"):
+        params["extra_body"] = {"think": False, "options": {"num_ctx": 8192}}
+
     return params

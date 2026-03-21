@@ -18,11 +18,11 @@ Handle PDF documents: discovery, parse mode selection, and entity reconciliation
 | `pymupdf` | Direct text extraction + optional image/table capture | Text-heavy PDFs, research papers, reports | Fastest |
 | `docling` | Full layout detection engine | Structured docs with tables, sections, mixed layout | Moderate |
 | `page_image` | Each page → image → VLM describes holistically | Slides/PPT-as-PDF, diagrams, flowcharts, visually complex pages | Fast (parallelized) |
-| `vlm_blocks` | pymupdf extracts bboxes → each block → VLM classifies + reading order | Mixed content where block-level granularity matters; faster alternative to docling | Faster than docling (experimental) |
+| `vlm_blocks` | pymupdf extracts bboxes → each block → VLM classifies + reading order | **Experimental — prefer `docling`.** Mixed content where block-level granularity matters and docling is not available | Faster than docling |
 
 **`page_image`** — use when meaning comes from visual layout rather than text (slides, pipeline diagrams, architecture charts, color/spatial arrangement). Text extraction alone would produce meaningless fragments. The page is the atomic unit: one chunk per page.
 
-**`vlm_blocks`** — use for documents with a mix of text and visual blocks where sub-page granularity matters and docling is too slow.
+**`vlm_blocks`** — **experimental, prefer `docling`**. Use only when docling is not available and sub-page block granularity matters.
 
 **Do not use `page_image`** for long-form text documents (use `pymupdf`) or tables with structured section hierarchy (use `docling` or `vlm_blocks`).
 

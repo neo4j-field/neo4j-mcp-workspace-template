@@ -29,14 +29,13 @@ Node types depend on the parse mode used. See [Parse Modes](#parse-modes) below.
 | `pymupdf` | Document, Chunk, Image, Table | General-purpose text + visual extraction |
 | `docling` | Document, Page, Element, Section, (then Chunk via chunking tool) | Complex layouts, section-aware chunking |
 | `page_image` | Document, Page | Slides/presentations for VLM-based extraction |
-| `vlm_blocks` | Document, Page, Element, Section, (then Chunk via chunking tool) | Complex layouts without docling dependency (uses VLM API) |
+| `vlm_blocks` | Document, Page, Element, Section, (then Chunk via chunking tool) | **Experimental.** Complex layouts without docling dependency (uses VLM API). Prefer `docling` for production use. |
 
 ## Quick Start
 
 ```bash
 cd mcp-neo4j-lexical-graph
-uv sync                        # pymupdf + page_image modes
-uv sync --extra docling        # add docling support
+uv sync
 ```
 
 ### Cursor MCP Configuration
@@ -95,13 +94,13 @@ Tools must be called in a specific order — which tools to call depends on the 
 
 | Tool | Description |
 |------|-------------|
-| `create_lexical_graph` | Parse PDF(s) and create the graph (async, returns job_id) |
+| `create_lexical_graph` | Parse PDF(s) and create the graph (async, returns job_id). `max_parallel=0` auto-detects worker count from RAM/CPU. |
 | `check_processing_status` | Monitor background job progress |
 | `cancel_job` | Cancel a running background job (optional cleanup of partial data) |
 | `chunk_lexical_graph` | Create Chunk nodes from Elements (4 strategies: token_window, structured, by_section, by_page) |
 | `list_documents` | Inventory of documents with version and chunk count info |
 | `verify_lexical_graph` | Structural checks + Markdown reconstruction (single-doc only) |
-| `assign_section_hierarchy` | LLM-based section level assignment + rebuilds HAS_SUBSECTION + updates sectionContext on chunks |
+| `assign_section_hierarchy` | LLM-based section level assignment + rebuilds HAS_SUBSECTION + updates sectionContext on chunks. Omit `document_id` to run all active documents in parallel. |
 | `generate_chunk_descriptions` | VLM descriptions for Image/Table/Page nodes — stored as textDescription. `document_id` optional: omit to run for all active documents. |
 | `embed_chunks` | Vector embeddings + fulltext index. Auto-detects textDescription for unified Table/Image/text embedding. |
 | `set_active_version` | Activate a specific document/chunk version |

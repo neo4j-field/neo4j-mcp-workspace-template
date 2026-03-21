@@ -45,6 +45,8 @@ After running:
 - `embed_chunks` will auto-detect this and use `COALESCE(textDescription, text)`
 - `extract_entities` will route Table/Image chunks through VLM extraction
 
+**Non-informative image guard:** The VLM automatically detects logos, headers, footers, and decorative elements. These are stored as `"Non-informative image: [label]"` rather than fabricating domain content. They embed at low similarity scores and don't pollute semantic search.
+
 ---
 
 ## Step 5 — Generate embeddings (required for semantic search)

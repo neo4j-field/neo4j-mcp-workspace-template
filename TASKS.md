@@ -54,15 +54,6 @@ _(nothing — ready for next test run)_
 - [ ] Add embedding dimension mismatch warning to `embed_chunks` — detect if existing vector index has different dimensions than the current `EMBEDDING_MODEL` and warn before overwriting
 - [ ] Add negative prompt guidance to `build_system_prompt()` in `base_extractor.py` — instruct model not to extract drug class names as drug entities, and not to extract table headers / statistical notation as trial names
 
-### In progress (2026-03-20 session)
-- [ ] **Reorder tools in `server.py` (lexical graph MCP) to match correct workflow sequence**
-  - Current order has `generate_chunk_descriptions` last (must be before `embed_chunks`), `list_documents` after `verify_lexical_graph` (needs to be before it), `delete_document` in the middle (destructive, should be last)
-  - Correct order: create → check_processing_status → cancel_job → chunk_lexical_graph → list_documents → verify_lexical_graph → assign_section_hierarchy → generate_chunk_descriptions → embed_chunks → set_active_version → clean_inactive → delete_document
-- [ ] **Revise lexical graph tool ordering and dependencies in `HANDLE_UNSTRUCTURED_DATA.md`**
-  - Make all tool dependencies explicit (not just page_image special cases)
-  - `generate_chunk_descriptions` dependency: currently documented for `page_image` only, but Image/Table nodes are silently skipped in ALL parse modes if they have no `textDescription` — generalize to "recommended for any doc with images/tables"
-  - Reflect new generic `embed_chunks` parameters in skill guidance
-
 ### Skill / server improvements identified (from runs 1–4)
 - [ ] Add `relationships_only` pass trigger to Step 7 of `build-pdf-chatbot` skill
   - Currently blocked: `pass_type="relationships_only"` not implemented in entity-graph v1
@@ -74,15 +65,25 @@ _(nothing — ready for next test run)_
 - [ ] Add large-scale parallel subagent evaluation pattern to skill Step 8 *(new — run 3)*
 - [ ] Fix or document entity relationship creation failure (CITES/MENTIONS/DISCUSSES = 0) in entity-graph *(new — run 3, Issue T-2)*
 - [ ] Document LiteLLM model name format in entity-graph `extract_entities` tool *(new — run 3, Issue T-1)*
-- [ ] Fix outdated tool names in `develop-neo4j-graph` skill (`create_lexical_graph_from_pdf`, `create_chunk_embeddings`, `extract_entities_from_chunks`, `get_entity_extraction_status`) *(run 4)*
-- [ ] Add `chunk_lexical_graph` step to PDF pipeline in skill — critical missing step for docling/vlm_blocks/page_image modes *(run 4)*
-- [ ] Add `convert_schema` as Step 1 of entity extraction in skill *(run 4)*
+- [x] Fix outdated tool names in `develop-neo4j-graph` skill *(run 4)*
+- [x] Add `chunk_lexical_graph` step to PDF pipeline in skill *(run 4)*
+- [x] Add `convert_schema` as Step 1 of entity extraction in skill *(run 4)*
 - [ ] Add pre-extraction constraint compatibility check to skill (key property vs. graph constraints) *(run 4)*
 - [ ] Fix `embed_chunks` output — make skipped chunk count + reason explicit *(run 4)*
 - [ ] Add `stalled` detection to `check_processing_status` (stuck on last chunk for 5+ min) *(run 4)*
 - [ ] Add `extract_entities` pre-flight constraint check in entity-graph server *(run 4)*
-- [ ] Add docling install note to skill: `uv sync --extra docling` required *(run 4)*
+- [x] Add docling install note to skill — now moot: docling is a main dependency, no extra needed *(run 4)*
 - [ ] Fix `chunk_lexical_graph(clear_existing_chunks=True, document_id=None)` — returns "No documents need chunking" after clearing instead of re-chunking; workaround is explicit `document_id` per doc *(2026-03-20)*
+
+### Completed (2026-03-21 session)
+- [x] Reorder tools in `server.py` to match correct workflow sequence
+- [x] Revise tool ordering and dependencies in `HANDLE_UNSTRUCTURED_DATA.md` and all mode reference files
+- [x] `assign_section_hierarchy` all-docs parallel mode (omit `document_id` → runs all active docs via `asyncio.gather`)
+- [x] `generate_chunk_descriptions` prompt improvements: caption + section context wired in, non-informative image guard, domain-neutral language, pymupdf markdown table fallback
+- [x] `max_parallel=0` auto-detect for `create_lexical_graph` (RAM/CPU-based worker count)
+- [x] Docling moved to main dependency — `uv sync --extra docling` no longer needed
+- [x] `vlm_blocks` flagged as experimental in README, skill, server tool description
+- [x] README + all skills audited and updated for today's changes
 
 ### Demo data + automated testing
 - [ ] Choose best validated dataset from testing as the demo example
@@ -90,11 +91,6 @@ _(nothing — ready for next test run)_
 - [ ] Write `demo/download.sh` — fetches demo data into `data/`
 - [ ] Populate `demo/expected/` — reference outputs (data model JSON, queries YAML, report MD)
 - [ ] Write `demo/run-test.sh` — smoke test: download → run workflow → validate graph (node counts, indexes)
-
-### Cursor skills (do last, after all Claude Code testing is done)
-- [ ] Sync `.cursor/skills/develop-neo4j-graph/` with updated Claude command
-- [ ] Create `.cursor/skills/build-pdf-chatbot/` mirroring the Claude command
-- [ ] Test both skills in Cursor
 
 ---
 

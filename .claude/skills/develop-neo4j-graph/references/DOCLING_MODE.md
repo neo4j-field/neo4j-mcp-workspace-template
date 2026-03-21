@@ -12,6 +12,7 @@ Key parameters:
 - `extract_sections=True` (default) — extracts section headings. Keep enabled.
 - `extract_toc=True` (default) — extracts table of contents. Keep enabled.
 - `skip_furniture=True` (default) — skips headers/footers.
+- `max_parallel=0` (default) — auto-detects optimal worker count from available RAM and CPU. Set explicitly (e.g. `max_parallel=2`) to cap resource usage on memory-constrained machines.
 
 Docling is slower than pymupdf. For large batches, budget more time.
 Use `check_processing_status(job_id)` to monitor.
@@ -50,6 +51,11 @@ Call `assign_section_hierarchy` for documents with nested sections (legal texts,
 - Rebuilds `HAS_SUBSECTION` relationships.
 - Updates `sectionContext` on active Chunk nodes (e.g. `"Chapter 1 > Section 1.1 > Sub 1.1.1"`).
 
+Call without `document_id` to process all active documents in parallel (recommended for batches):
+```
+assign_section_hierarchy()
+```
+
 Skip for flat documents with no section hierarchy.
 
 ---
@@ -62,6 +68,8 @@ Call without `document_id` to run for all active documents at once:
 ```
 generate_chunk_descriptions(parallel=10)
 ```
+
+**Non-informative image guard:** The VLM automatically detects logos, headers, footers, and decorative elements. These are stored as `"Non-informative image: [label]"` rather than fabricating domain content. They embed at low similarity scores and don't pollute semantic search.
 
 ---
 

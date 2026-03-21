@@ -96,6 +96,26 @@ _WARNING_THRESHOLD_SECONDS = 120
 DEFAULT_EXTRACTION_MODEL = "gpt-5-mini"
 
 
+def _suggest_max_workers() -> int:
+    """Auto-detect optimal ProcessPoolExecutor worker count based on available hardware.
+
+    Docling loads neural network models (~1.5 GB RAM per worker) and is CPU-bound.
+    We cap at 4 workers: diminishing returns beyond that for model inference.
+    """
+    try:
+        import psutil
+        available_ram_gb = psutil.virtual_memory().available / (1024 ** 3)
+        ram_limited = max(1, int(available_ram_gb / 1.5))
+    except ImportError:
+        ram_limited = 2  # conservative fallback if psutil unavailable
+
+    cpu_count = os.cpu_count() or 1
+    cpu_limited = max(1, cpu_count - 2)  # leave 2 cores for event loop + Neo4j writes
+
+    suggested = min(ram_limited, cpu_limited, 4)
+    return max(1, suggested)
+
+
 def create_mcp_server(
     neo4j_driver: AsyncDriver,
     database: str = "neo4j",
@@ -110,7 +130,8 @@ def create_mcp_server(
 
     # Use provided or create defaults
     _job_manager = job_manager or JobManager()
-    _process_pool = process_pool or ProcessPoolExecutor(max_workers=2)
+    _auto_workers = _suggest_max_workers()
+    _process_pool = process_pool or ProcessPoolExecutor(max_workers=_auto_workers)
 
     # ===========================================================
     # TOOL 1: create_lexical_graph (always async / background)
@@ -133,7 +154,7 @@ def create_mcp_server(
             None, description="Custom sourceId (defaults to filename). Ignored for folders."
         ),
         parse_mode: str = Field(
-            "pymupdf", description="Parse mode: 'pymupdf', 'docling', 'page_image', or 'vlm_blocks'"
+            "pymupdf", description="Parse mode: 'pymupdf', 'docling', 'page_image', or 'vlm_blocks' (experimental — prefer docling)"
         ),
         store_page_images: bool = Field(
             False, description="Render and store page images on Page nodes"
@@ -168,6 +189,14 @@ def create_mcp_server(
         text_preview_length: int = Field(
             200, description="Characters of text preview sent to VLM per block (vlm_blocks mode)"
         ),
+        max_parallel: int = Field(
+            0,
+            description=(
+                "Max documents to parse concurrently (docling/pymupdf modes). "
+                "0 = auto-detect based on available RAM and CPU cores. "
+                "vlm_blocks always runs sequentially."
+            ),
+        ),
     ) -> str:
         """Parse PDF(s) and create the lexical graph in Neo4j.
 
@@ -179,7 +208,7 @@ def create_mcp_server(
           Set extract_images=False and extract_tables=False for text-only (Document + Chunk only).
         - docling: Full layout analysis with sections, tables, captions. (requires docling extra)
         - page_image: Page images + text. Creates Document + Page nodes for VLM use.
-        - vlm_blocks: PyMuPDF blocks + VLM reading order/classification. Creates Document + Page + Element + Section nodes.
+        - vlm_blocks: [EXPERIMENTAL — prefer docling] PyMuPDF blocks + VLM reading order/classification. Creates Document + Page + Element + Section nodes.
 
         **Returns immediately** with a job_id. Use check_processing_status(job_id) to monitor.
         """
@@ -214,9 +243,14 @@ def create_mcp_server(
             file_page_counts.append((str(pdf), pc))
             total_pages += pc
 
-        # Estimate processing time
+        # Resolve effective parallelism for this job
+        effective_parallel = max_parallel if max_parallel > 0 else _suggest_max_workers()
+        if parse_mode == "vlm_blocks":
+            effective_parallel = 1  # vlm_blocks is always sequential
+
+        # Estimate processing time (adjusted for parallelism)
         rate = _TIME_PER_PAGE.get(parse_mode, 10.0)
-        estimated_seconds = total_pages * rate
+        estimated_seconds = (total_pages * rate) / effective_parallel
         estimated_minutes = round(estimated_seconds / 60, 1)
 
         # Create the job
@@ -260,6 +294,7 @@ def create_mcp_server(
                 document_id=document_id,
                 parse_kwargs=parse_kwargs,
                 extraction_model=extraction_model,
+                max_parallel=effective_parallel,
             )
         )
         _job_manager.register_task(job.id, task)
@@ -271,6 +306,7 @@ def create_mcp_server(
             "files_total": files_total,
             "total_pages": total_pages,
             "estimated_minutes": estimated_minutes,
+            "max_parallel": effective_parallel,
             "message": (
                 f"Job queued. Use check_processing_status('{job.id}') to monitor."
             ),
@@ -922,7 +958,13 @@ def create_mcp_server(
         ),
     )
     async def assign_section_hierarchy_tool(
-        document_id: str = Field(..., description="Document version id to process"),
+        document_id: Optional[str] = Field(
+            None,
+            description=(
+                "Document version id to process. "
+                "If omitted, runs on all active documents in parallel (LLM mode only)."
+            ),
+        ),
         model: Optional[str] = Field(
             None,
             description="LLM model to use (defaults to EXTRACTION_MODEL env var)",
@@ -932,7 +974,8 @@ def create_mcp_server(
             description=(
                 'Optional: agent-provided hierarchy as JSON string, e.g. '
                 '\'[{"id": "doc_v1_sec_0", "level": 1}, {"id": "doc_v1_sec_1", "level": 2}]\'. '
-                "When provided, skips the LLM call and applies these levels directly."
+                "When provided, skips the LLM call and applies these levels directly. "
+                "Requires document_id (agent mode cannot run on all docs at once)."
             ),
         ),
     ) -> str:
@@ -945,16 +988,19 @@ def create_mcp_server(
 
         Two modes:
         - LLM mode (default): automatically infers hierarchy using the configured LLM.
+          When document_id is None, runs on ALL active documents concurrently.
         - Agent mode: pass a hierarchy JSON to apply levels directly (no LLM call).
-          If the LLM call fails (no API key, network error), returns sections for the agent to decide.
+          Requires document_id. If the LLM call fails, returns sections for the agent to decide.
         """
         try:
             use_model = model or extraction_model
-            doc = await get_document(neo4j_driver, database, document_id)
-            if not doc:
-                raise ToolError(f"Document not found: {document_id}")
 
-            doc_name = doc.get("name", document_id)
+            # Agent mode requires a specific document
+            if hierarchy and not document_id:
+                raise ToolError(
+                    "document_id is required when providing a hierarchy JSON (agent mode). "
+                    "Agent mode cannot run on all documents at once."
+                )
 
             parsed_hierarchy = None
             if hierarchy:
@@ -963,15 +1009,51 @@ def create_mcp_server(
                 except json.JSONDecodeError as e:
                     raise ToolError(f"Invalid hierarchy JSON: {e}")
 
-            result = await _assign_hierarchy(
-                neo4j_driver, database, document_id, doc_name,
-                model=use_model, hierarchy=parsed_hierarchy,
+            # Single-document path
+            if document_id:
+                doc = await get_document(neo4j_driver, database, document_id)
+                if not doc:
+                    raise ToolError(f"Document not found: {document_id}")
+                doc_name = doc.get("name", document_id)
+                result = await _assign_hierarchy(
+                    neo4j_driver, database, document_id, doc_name,
+                    model=use_model, hierarchy=parsed_hierarchy,
+                )
+                if "error" in result:
+                    raise ToolError(result["error"])
+                return json.dumps(result, indent=2, default=str)
+
+            # All-documents path: parallel LLM calls
+            all_docs = await list_all_documents(neo4j_driver, database)
+            active_docs = [d for d in all_docs if d.get("active")]
+            if not active_docs:
+                return json.dumps({"message": "No active documents found."})
+
+            async def _process_one(doc: dict) -> dict:
+                doc_id = doc["id"]
+                doc_name = doc.get("name", doc_id)
+                try:
+                    result = await _assign_hierarchy(
+                        neo4j_driver, database, doc_id, doc_name,
+                        model=use_model, hierarchy=None,
+                    )
+                    return {"document_id": doc_id, "document_name": doc_name, **result}
+                except Exception as exc:
+                    return {"document_id": doc_id, "document_name": doc_name, "error": str(exc)}
+
+            results = await asyncio.gather(*[_process_one(d) for d in active_docs])
+            successes = [r for r in results if "error" not in r]
+            failures = [r for r in results if "error" in r]
+            return json.dumps(
+                {
+                    "documents_processed": len(active_docs),
+                    "succeeded": len(successes),
+                    "failed": len(failures),
+                    "results": list(results),
+                },
+                indent=2,
+                default=str,
             )
-
-            if "error" in result:
-                raise ToolError(result["error"])
-
-            return json.dumps(result, indent=2, default=str)
 
         except ToolError:
             raise
@@ -1670,55 +1752,74 @@ async def _run_job(
     document_id: Optional[str],
     parse_kwargs: dict[str, Any],
     extraction_model: str = "gpt-5-mini",
+    max_parallel: int = 1,
 ) -> None:
-    """Background task that orchestrates parse-one-write-one processing.
+    """Background task that orchestrates parallel-parse, sequential-write processing.
 
-    For each PDF:
-      1. Submit parsing to subprocess (with tentative version=1)
-      2. After parsing, determine real version atomically (right before write)
-      3. Remap IDs if version changed
-      4. Write result to Neo4j (with retry on constraint violation)
+    Files are parsed in batches of max_parallel concurrently (using the process pool),
+    then each result is written to Neo4j sequentially (keeps version handling atomic).
+    vlm_blocks always runs sequentially (async parser, cannot run in subprocess).
+
+    For each file:
+      1. Submit parsing to subprocess (tentative version=1)
+      2. After all batch parses complete, write each result sequentially
+      3. Determine real version atomically (right before write)
+      4. Remap IDs if version changed, write to Neo4j with retry
       5. Update job progress
     """
-    from .worker import parse_single_pdf
+    from .worker import parse_single_pdf  # noqa: F401 — ensures pickle works in pool
 
     loop = asyncio.get_running_loop()
     progress_queue: multiprocessing.Queue = multiprocessing.Queue()
+    worker_kwargs = {
+        k: v for k, v in parse_kwargs.items()
+        if k not in ("max_vlm_parallel", "vlm_prompt", "text_preview_length")
+    }
 
     try:
-        for file_idx, (pdf_path, page_count) in enumerate(file_page_counts):
-            # Check cancellation
+        # Process files in batches of max_parallel
+        for batch_start in range(0, len(file_page_counts), max_parallel):
+            batch = file_page_counts[batch_start:batch_start + max_parallel]
+
+            # Check cancellation before each batch
             job = job_manager.get_job(job_id)
             if not job or job.status == JobStatus.CANCELLED:
                 logger.info("Job cancelled, stopping", job_id=job_id)
                 return
 
-            pdf_name = Path(pdf_path).name
-            source_id = document_id if (not is_folder and document_id) else Path(pdf_path).stem
-
-            # Update progress: starting this file
-            job_manager.update_progress(
-                job_id,
-                current_file=pdf_name,
-                current_file_pages=page_count,
-                current_stage="parsing",
-            )
             job_manager.update_status(job_id, JobStatus.PARSING)
+            batch_size = len(batch)
 
-            try:
-                # Parse with tentative version=1 (real version determined at write time)
-                tentative_version = 1
+            # --- PARSE PHASE: submit all files in batch concurrently ---
+            batch_infos: list[tuple[str, int, str]] = []  # (pdf_path, page_count, source_id)
+            parse_futures: list[Any] = []
+
+            for pdf_path, page_count in batch:
+                pdf_name = Path(pdf_path).name
+                source_id = document_id if (not is_folder and document_id) else Path(pdf_path).stem
+                batch_infos.append((pdf_path, page_count, source_id))
+
+                current_file_label = (
+                    pdf_name if batch_size == 1
+                    else f"{batch_size} files in parallel"
+                )
+                job_manager.update_progress(
+                    job_id,
+                    current_file=current_file_label,
+                    current_file_pages=page_count,
+                    current_stage="parsing",
+                )
 
                 logger.info(
                     "Submitting for parsing",
                     job_id=job_id,
                     file=pdf_name,
                     mode=parse_mode,
-                    tentative_version=tentative_version,
+                    batch_size=batch_size,
                 )
 
                 if parse_mode == "vlm_blocks":
-                    # VLM blocks mode: async parser, runs in the event loop directly
+                    # VLM blocks: async parser, runs in the event loop (not subprocess)
                     from .parsers.vlm_blocks import VLMBlocksParser
 
                     vlm_parser = VLMBlocksParser(
@@ -1728,7 +1829,7 @@ async def _run_job(
                     parsed_doc = await vlm_parser.parse_async(
                         pdf_path=pdf_path,
                         source_id=source_id,
-                        version=tentative_version,
+                        version=1,
                         metadata=parse_kwargs.get("metadata"),
                         dpi=parse_kwargs.get("dpi", 150),
                         store_page_images=parse_kwargs.get("store_page_images", False),
@@ -1737,127 +1838,145 @@ async def _run_job(
                         extract_sections=parse_kwargs.get("extract_sections", True),
                         text_preview_length=parse_kwargs.get("text_preview_length", 200),
                     )
-                    # Wrap as worker_result for version remapping compatibility
-                    worker_result = {
-                        "parse_mode": "vlm_blocks",
-                        "parsed_doc": parsed_doc.model_dump(),
-                    }
+                    # Wrap as a resolved future so the gather below works uniformly
+                    fut: asyncio.Future[Any] = loop.create_future()
+                    fut.set_result({"parse_mode": "vlm_blocks", "parsed_doc": parsed_doc.model_dump()})
+                    parse_futures.append(fut)
                 else:
-                    # Filter out VLM-only keys that parse_single_pdf doesn't accept
-                    worker_kwargs = {
-                        k: v for k, v in parse_kwargs.items()
-                        if k not in ("max_vlm_parallel", "vlm_prompt", "text_preview_length")
-                    }
-                    try:
-                        worker_result = await loop.run_in_executor(
+                    parse_futures.append(
+                        loop.run_in_executor(
                             process_pool,
                             _make_worker_call(
                                 pdf_path=pdf_path,
                                 source_id=source_id,
-                                version=tentative_version,
+                                version=1,  # tentative; remapped at write time
                                 parse_mode=parse_mode,
                                 progress_queue=progress_queue,
                                 **worker_kwargs,
                             ),
                         )
-                    except BrokenProcessPool:
-                        logger.error("Process pool crashed, recreating", job_id=job_id)
+                    )
+
+            # Wait for all parse tasks in this batch (exceptions are returned, not raised)
+            batch_results = await asyncio.gather(*parse_futures, return_exceptions=True)
+
+            # --- WRITE PHASE: write each result sequentially ---
+            job_manager.update_status(job_id, JobStatus.WRITING)
+
+            for (pdf_path, page_count, source_id), worker_result in zip(batch_infos, batch_results):
+                pdf_name = Path(pdf_path).name
+
+                # Handle parse-phase errors
+                if isinstance(worker_result, BaseException):
+                    if isinstance(worker_result, BrokenProcessPool):
                         raise RuntimeError(
                             f"Subprocess crashed while parsing {pdf_name}. "
                             "This may be due to memory or a docling bug."
                         )
-
-                # Update: writing phase -- determine real version NOW
-                job_manager.update_progress(job_id, current_stage="writing")
-                job_manager.update_status(job_id, JobStatus.WRITING)
-
-                # Atomically determine real version (right before write)
-                existing = await get_existing_versions(neo4j_driver, database, source_id)
-                real_version = 1
-                if existing:
-                    real_version = max(v["version"] for v in existing) + 1
-                    await deactivate_versions(neo4j_driver, database, source_id)
-
-                # Remap IDs if version differs from tentative
-                if real_version != tentative_version:
-                    logger.info(
-                        "Version remapped",
+                    logger.error(
+                        f"Failed to parse {pdf_name}",
                         job_id=job_id,
-                        file=pdf_name,
-                        tentative=tentative_version,
-                        real=real_version,
+                        error=str(worker_result),
                     )
-                    worker_result = _remap_version_in_result(
-                        worker_result, source_id, tentative_version, real_version
+                    job_manager.update_progress(
+                        job_id,
+                        files_failed=job_manager.get_job(job_id).files_failed + 1,
                     )
+                    job_manager.get_job(job_id).errors.append({
+                        "filename": pdf_name,
+                        "error": str(worker_result),
+                    })
+                    if not is_folder:
+                        raise worker_result  # type: ignore[misc]
+                    continue
 
-                version = real_version
+                job_manager.update_progress(job_id, current_stage="writing")
 
-                # Write to Neo4j with retry on constraint violation
-                max_retries = 2
-                for attempt in range(max_retries + 1):
-                    try:
-                        doc_summary = await _write_worker_result_to_neo4j(
-                            neo4j_driver, database, worker_result, source_id, version
+                try:
+                    # Atomically determine real version (right before write)
+                    existing = await get_existing_versions(neo4j_driver, database, source_id)
+                    real_version = 1
+                    if existing:
+                        real_version = max(v["version"] for v in existing) + 1
+                        await deactivate_versions(neo4j_driver, database, source_id)
+
+                    if real_version != 1:
+                        logger.info(
+                            "Version remapped",
+                            job_id=job_id,
+                            file=pdf_name,
+                            tentative=1,
+                            real=real_version,
                         )
-                        break
-                    except Exception as write_err:
-                        err_str = str(write_err)
-                        if "ConstraintValidationFailed" in err_str and attempt < max_retries:
-                            # Another job created this version concurrently -- bump and retry
-                            version += 1
-                            logger.warning(
-                                "Constraint conflict, retrying with higher version",
-                                job_id=job_id,
-                                file=pdf_name,
-                                new_version=version,
-                                attempt=attempt + 1,
+                        worker_result = _remap_version_in_result(
+                            worker_result, source_id, 1, real_version
+                        )
+
+                    version = real_version
+
+                    # Write to Neo4j with retry on constraint violation
+                    max_retries = 2
+                    for attempt in range(max_retries + 1):
+                        try:
+                            doc_summary = await _write_worker_result_to_neo4j(
+                                neo4j_driver, database, worker_result, source_id, version
                             )
-                            worker_result = _remap_version_in_result(
-                                worker_result, source_id, version - 1, version
-                            )
-                        else:
-                            raise
+                            break
+                        except Exception as write_err:
+                            err_str = str(write_err)
+                            if "ConstraintValidationFailed" in err_str and attempt < max_retries:
+                                version += 1
+                                logger.warning(
+                                    "Constraint conflict, retrying with higher version",
+                                    job_id=job_id,
+                                    file=pdf_name,
+                                    new_version=version,
+                                    attempt=attempt + 1,
+                                )
+                                worker_result = _remap_version_in_result(
+                                    worker_result, source_id, version - 1, version
+                                )
+                            else:
+                                raise
 
-                # Record successful document
-                job_manager.update_progress(
-                    job_id,
-                    files_completed=job_manager.get_job(job_id).files_completed + 1,
-                    total_pages_processed=(
-                        job_manager.get_job(job_id).total_pages_processed + page_count
-                    ),
-                    total_elements_extracted=(
-                        job_manager.get_job(job_id).total_elements_extracted
-                        + doc_summary.get("elements", 0)
-                    ),
-                )
-                job_manager.get_job(job_id).documents_created.append(doc_summary)
+                    # Record successful document
+                    job_manager.update_progress(
+                        job_id,
+                        files_completed=job_manager.get_job(job_id).files_completed + 1,
+                        total_pages_processed=(
+                            job_manager.get_job(job_id).total_pages_processed + page_count
+                        ),
+                        total_elements_extracted=(
+                            job_manager.get_job(job_id).total_elements_extracted
+                            + doc_summary.get("elements", 0)
+                        ),
+                    )
+                    job_manager.get_job(job_id).documents_created.append(doc_summary)
 
-                logger.info(
-                    "Document written to Neo4j",
-                    job_id=job_id,
-                    document_id=doc_summary.get("document_id"),
-                )
+                    logger.info(
+                        "Document written to Neo4j",
+                        job_id=job_id,
+                        document_id=doc_summary.get("document_id"),
+                    )
 
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.error(
-                    f"Failed to process {pdf_name}",
-                    job_id=job_id,
-                    error=str(e),
-                )
-                job_manager.update_progress(
-                    job_id,
-                    files_failed=job_manager.get_job(job_id).files_failed + 1,
-                )
-                job_manager.get_job(job_id).errors.append({
-                    "filename": pdf_name,
-                    "error": str(e),
-                })
-                # Continue with next file (don't stop the batch)
-                if not is_folder:
+                except asyncio.CancelledError:
                     raise
+                except Exception as e:
+                    logger.error(
+                        f"Failed to process {pdf_name}",
+                        job_id=job_id,
+                        error=str(e),
+                    )
+                    job_manager.update_progress(
+                        job_id,
+                        files_failed=job_manager.get_job(job_id).files_failed + 1,
+                    )
+                    job_manager.get_job(job_id).errors.append({
+                        "filename": pdf_name,
+                        "error": str(e),
+                    })
+                    if not is_folder:
+                        raise
 
         # All files done -- write manifest for folders
         job = job_manager.get_job(job_id)
@@ -2458,9 +2577,10 @@ async def main(
 
     # Create shared components for background processing
     job_mgr = JobManager()
-    process_pool = ProcessPoolExecutor(max_workers=2)
+    auto_workers = _suggest_max_workers()
+    process_pool = ProcessPoolExecutor(max_workers=auto_workers)
 
-    logger.info("Process pool and job manager initialized", max_workers=2)
+    logger.info("Process pool and job manager initialized", max_workers=auto_workers)
 
     mcp_server = create_mcp_server(
         neo4j_driver=neo4j_driver,

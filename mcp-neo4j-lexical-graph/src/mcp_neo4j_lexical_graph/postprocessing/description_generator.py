@@ -21,25 +21,45 @@ logger = structlog.get_logger()
 
 IMAGE_PROMPT = """\
 You are analysing a visual element from the document "{document_name}".
-{context_line}
-Describe this image concisely but thoroughly. Focus on:
-- What the image depicts (diagram, chart, photo, schematic, etc.)
-- Key visual elements and their relationships
-- Any text, labels, or annotations visible in the image
-- How this image relates to the document context
+{section_context_line}{caption_line}
+IMPORTANT: First decide whether this image carries meaningful content (a chart, graph, \
+diagram, schematic, screenshot, photograph, map, infographic, or any other informative visual). \
+If it is a logo, header, footer, decorative element, watermark, icon, or page furniture \
+with no standalone informational value, respond with exactly: \
+"Non-informative image: [brief label, e.g. company logo, page header]" and stop. \
+Do not fabricate content.
 
-Write a single paragraph suitable for use as a search-friendly text embedding."""
+If it carries meaningful content, write a description that enables semantic similarity search — \
+someone querying for the information, concepts, or insights this image conveys \
+should be able to find it.
+
+Extract and describe:
+1. What the image shows or communicates (subject matter, purpose, domain)
+2. What is being compared, measured, or illustrated (entities, variables, categories, steps)
+3. Key findings, values, relationships, or conclusions visible in the image
+4. The visual type (bar chart, line graph, diagram, flowchart, photograph, map, screenshot, etc.)
+5. Any readable text, labels, legends, or annotations
+
+Write a single dense paragraph using the vocabulary and domain of the document. \
+Express meaning and content — avoid vague visual vocabulary like "blue bar" or "arrow pointing right". \
+Only describe what you can actually read or see — do not infer or fabricate."""
 
 TABLE_PROMPT = """\
 You are analysing a table from the document "{document_name}".
-{context_line}
-{html_section}
-Describe this table concisely but thoroughly. Focus on:
-- The table structure (rows, columns, headers)
-- Key data points and patterns
-- What the table shows and its significance in the document context
+{section_context_line}{caption_line}
+{table_content_section}
+Your goal is to write a description that enables semantic similarity search — \
+someone querying for the data, comparisons, or information this table presents \
+should be able to find it.
 
-Write a single paragraph suitable for use as a search-friendly text embedding."""
+Extract and describe:
+1. What the table covers (subject matter, purpose, domain)
+2. What is being compared or reported (rows, columns, categories, time periods, entities)
+3. Key values, patterns, or notable differences visible in the data
+4. Any conclusions or significance the table supports in the document context
+
+Write a single dense paragraph using the vocabulary and domain of the document. \
+Do not describe table structure — express the content and meaning."""
 
 PAGE_PROMPT = """\
 You are analysing page {page_number} of the document "{document_name}".
@@ -168,32 +188,42 @@ async def generate_description_for_chunk(
     doc_name = chunk_info.get("documentName") or "Unknown"
     sec_context = chunk_info.get("sectionContext") or ""
     text_as_html = chunk_info.get("textAsHtml") or ""
+    chunk_text = chunk_info.get("chunkText") or ""
 
     if not image_b64:
         logger.warning("No image data for chunk", chunk_id=chunk_info.get("chunkId"))
         return None
 
-    context_line = f"Section context: {sec_context}" if sec_context else ""
+    section_context_line = f"Section: {sec_context}\n" if sec_context else ""
+    caption_line = f"Caption: {chunk_text}\n" if chunk_text else ""
 
     if chunk_type == "page":
         page_number = chunk_info.get("pageNumber", 0) + 1
-        extracted_text = chunk_info.get("chunkText") or "(no text extracted)"
+        extracted_text = chunk_text or "(no text extracted)"
         prompt_text = PAGE_PROMPT.format(
             document_name=doc_name,
             page_number=page_number,
             extracted_text=extracted_text,
         )
     elif chunk_type == "table":
-        html_section = f"Table HTML:\n```html\n{text_as_html}\n```" if text_as_html else ""
+        # Prefer HTML (docling); fall back to markdown text (pymupdf)
+        if text_as_html:
+            table_content_section = f"Table content (HTML):\n```html\n{text_as_html}\n```"
+        elif chunk_text:
+            table_content_section = f"Table content:\n```\n{chunk_text}\n```"
+        else:
+            table_content_section = ""
         prompt_text = TABLE_PROMPT.format(
             document_name=doc_name,
-            context_line=context_line,
-            html_section=html_section,
+            section_context_line=section_context_line,
+            caption_line=caption_line,
+            table_content_section=table_content_section,
         )
     else:
         prompt_text = IMAGE_PROMPT.format(
             document_name=doc_name,
-            context_line=context_line,
+            section_context_line=section_context_line,
+            caption_line=caption_line,
         )
 
     messages = [

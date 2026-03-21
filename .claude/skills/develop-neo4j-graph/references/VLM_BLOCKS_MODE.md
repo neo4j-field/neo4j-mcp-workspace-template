@@ -1,6 +1,6 @@
 # Ingestion: `vlm_blocks` mode
 
-Use for mixed-content documents where sub-page block granularity matters and docling is too slow. Experimental. Follows the same sequence as `docling` mode with minor differences.
+**Experimental — prefer `docling` for production use.** Use only when docling is not available and sub-page block granularity matters. Follows the same sequence as `docling` mode with minor differences.
 
 ---
 
@@ -43,6 +43,11 @@ Call `verify_lexical_graph` on one document to check reading order and element t
 
 Call `assign_section_hierarchy` for documents with nested sections. Same behavior as docling mode — uses LLM to infer heading levels and updates `sectionContext` on chunks.
 
+Call without `document_id` to process all active documents in parallel:
+```
+assign_section_hierarchy()
+```
+
 ---
 
 ## Step 6 — Generate chunk descriptions (recommended when images or tables are present)
@@ -51,6 +56,8 @@ Call `generate_chunk_descriptions` without `document_id` to run for all active d
 ```
 generate_chunk_descriptions(parallel=10)
 ```
+
+**Non-informative image guard:** The VLM automatically detects logos, headers, footers, and decorative elements. These are stored as `"Non-informative image: [label]"` rather than fabricating domain content. They embed at low similarity scores and don't pollute semantic search.
 
 ---
 
