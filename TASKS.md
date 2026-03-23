@@ -4,9 +4,11 @@
 
 ---
 
-## Current Status (as of 2026-03-20)
+## Current Status (as of 2026-03-23)
 
-**Docling reading order bug investigated** — tested on 5 medical PDFs. Bug is isolated to right-column sidebar elements (KEYWORDS, KeyPoints, What's new? boxes) leaking into the next page's element chain. Pages are always in correct order. Single-column docs are clean. Root cause is upstream in docling's multi-column layout detection, not in the MCP server. Also confirmed: `assign_section_hierarchy` does not touch element order (only sets `level`, rebuilds `HAS_SUBSECTION`, updates `Chunk.sectionContext`). Additional bug found: `chunk_lexical_graph(clear_existing_chunks=True, document_id=None)` fails to re-chunk after clearing — workaround is to pass explicit `document_id`.
+**Session 2026-03-23** — Completed lexical-graph improvements: `assign_section_hierarchy` all-docs parallel mode, `generate_chunk_descriptions` prompt overhaul (non-informative image guard, domain-neutral language, caption + section context wired in), `max_parallel=0` auto-detect for `create_lexical_graph`, docling moved to main dependency, `vlm_blocks` flagged as experimental. All READMEs and skill references updated. Redesigned `dev/evaluate-pipeline` as `/send-feedback` skill (GitHub issue submission). Committed to PR #6.
+
+**Previous (2026-03-20)** — Docling reading order bug scoped: right-column sidebar elements only, upstream in docling, not a production blocker. `chunk_lexical_graph(clear_existing_chunks=True, document_id=None)` bug found — workaround: pass explicit `document_id`.
 
 ---
 
@@ -17,6 +19,67 @@ _(nothing — ready for next test run)_
 ---
 
 ## Todo
+
+### `/send-feedback` skill (replaces `dev/evaluate-pipeline`)
+Rename and redesign `dev/evaluate-pipeline` as a proper `/send-feedback` skill that submits a structured GitHub issue to the repo with full context. Natural home for pipeline quality feedback, bug reports, and feature requests from real runs.
+
+- [ ] **Rename + re-register** — move `dev/evaluate-pipeline` → `skills/send-feedback/`, update skill descriptor and registration
+- [ ] **GitHub issue submission** — use `gh issue create` (already available via Bash tool) to post directly to `neo4j-field/neo4j-mcp-workspace-template`:
+  - Issue title: auto-generated from use case + date
+  - Issue body: structured Markdown with sections below
+  - Issue labels: `feedback`, `pipeline-run`, and auto-detected labels (e.g. `docling`, `entity-graph`, `bug`)
+- [ ] **Issue body content:**
+  - Use case description (inferred from graph + session context)
+  - Parse mode, skill used, custom steps taken
+  - Repo branch + commit hash, MCP server versions
+  - Pipeline quality summary (retrieval hit rate, entity counts, known gaps)
+  - Up to 10 graph data samples — nodes/chunks as Markdown table, labeled "sample data"
+- [ ] **Explicit consent flow** — before posting:
+  - Show user the full issue body for review
+  - Warn that samples may contain content from their documents
+  - Let user edit or remove any section before confirming
+  - Only post after explicit user approval ("yes, send it")
+  - Always save report locally to `outputs/reports/` regardless of whether user sends
+- [ ] **Large dataset warning** — at skill start, count input files:
+  - PDFs > 100: warn, show count, propose random sample (e.g. 20) before ingestion
+  - CSV rows > 10,000: warn, show row count, propose sampling
+  - Never silently drop data — sampling must be explicit and reversible
+
+### `develop-neo4j-graph` skill UX improvements (from 2026-03-23 test run)
+
+- [ ] **Step 2 — use case framing question** — current question lists example queries which steers users toward chatbot mode. Replace with a cleaner binary first question: "Do you want to build a chatbot / GraphRAG Q&A application, or build a graph for another purpose (analytics, data pipeline, integration)?" Then drill into details based on the answer.
+
+- [ ] **Step 2 — questions-first approach** — after mode is confirmed, before jumping to data modeling, the skill should ask: "Do you already have a set of questions your users will ask?" If yes: use them to drive schema design. If no: propose a set of representative questions based on the sampled data and ask the user to validate/amend them before proceeding to modeling.
+
+- [ ] **Step 1 — document metadata via `metadata_json`** — `create_lexical_graph` has a `metadata_json` parameter that loads extra properties onto Document nodes. When sampling PDFs the agent already extracts useful metadata (company, date, content summary) into a table — this should be passed as `metadata_json` per document. Steps:
+  - Confirm what `metadata_json` accepts (per-file JSON? global JSON?) by reading the server code
+  - Check whether `documentName` + any metadata properties set on Document nodes are passed as context to `generate_chunk_descriptions` (VLM prompt), `embed_chunks`, and `extract_entities` — if not, investigate adding them
+  - If metadata does reach downstream tools: add an optional step to the skill where the agent generates the metadata JSON from the sampling table, shows it to the user for confirmation, and passes it to `create_lexical_graph`
+
+- [ ] **API concurrency not set by default** — user had to explicitly say "use concurrency 50" to get acceptable speed. This refers to concurrent API calls for `generate_chunk_descriptions(parallel=...)`, `embed_chunks`, and `extract_entities`. The skill should set a sensible high default (e.g. `parallel=20` or higher) rather than leaving it at the conservative default. Options: (a) hardcode a recommended value in the skill, or (b) ask the user upfront "Do you want to maximize speed? I'll use high API concurrency (50 parallel calls) — reduce this if you hit rate limits." Check the default values for `parallel` in each relevant tool and update the skill to use aggressive-but-safe defaults.
+
+- [ ] **MCP server not loaded — skill should handle gracefully** — during test, `neo4j-lexical-graph` tools were missing at session start. Agent correctly diagnosed and told user to restart. Two things to fix:
+  - Investigate root cause: why does the lexical-graph server sometimes fail to load on session start
+  - Check what `/setup-workspace` does and whether it should be called automatically at the start of `develop-neo4j-graph` (as a pre-flight check) rather than requiring the user to know about it
+
+- [ ] **`/dev:evaluate-pipeline` not available in new workspace** — slash command not found after fresh setup. Investigate: check skill registration path, whether the `dev/` subfolder is recognized, and whether this is related to the broader skill availability issue. This is also the trigger for the `/send-feedback` rename work.
+
+- [x] **Skill/tool parameter accuracy audit** — audited all tool parameters referenced in skill docs against server implementations. Only `pass_type` variants were unimplemented. Fixed: `extract_entities` Field description now only advertises `"full"`; unimplemented variants (`entities_only`, `relationships_only`, `corrective`) removed from tool description. Implementation of those variants remains future work.
+
+- [ ] **Tool confirmation prompts** — in a freshly set up workspace, Claude Code asks the user to confirm each tool call individually, which is very disruptive during a long pipeline run. Investigate whether this can be pre-configured: check if `settings.json` or `.claude/settings.json` supports auto-approving specific tools or MCP servers by default, and if so add this to `setup.sh` or document it clearly in the onboarding flow.
+
+- [ ] **Chatbot report completeness** — the auto-generated report is too thin. Improve it to include:
+  - Graph schema overview: node labels with counts, relationship types with counts
+  - For each test question: the exact tools called (vector_search, fulltext_search, read_neo4j_cypher, etc.) and the queries/parameters used — not just the answer
+  - A final section with improvement ideas: gaps in the graph, schema changes that would improve retrieval, suggested additional data sources
+
+- [ ] **Entity extraction regression on AbbVie pipeline page 4** — not all molecules were extracted from the AbbVie pipeline document (page 4 lists many molecules, previous runs had better coverage). Investigate:
+  - Check that all molecules appear in `Chunk.text` for the relevant chunks (verify with `read_neo4j_cypher`)
+  - Check chunk boundaries — is page 4 content split across multiple chunks, and if so are all chunks being sent to extraction?
+  - Check if the extraction model is truncating context or hitting token limits
+  - Compare chunk content vs previous run to see if something changed in chunking strategy or chunk size
+  - This may be a regression from recent changes — bisect if needed
+
 
 ### Testing
 - [x] **Second evaluation** — `/dev:evaluate-pipeline` completed for 5-company run
@@ -35,7 +98,9 @@ _(nothing — ready for next test run)_
   - Goal: verify section hierarchy improves retrieval precision for nested article references (art. X, comma Y)
   - Also: reproduce and confirm entity relationship creation failure (Issue T-2: CITES/MENTIONS/DISCUSSES = 0)
 - [ ] PDF `docling` mode — tabular PDF (pipeline detail table), clean run + evaluate
-- [ ] PDF `vlm_blocks` mode — mixed content, clean run + evaluate
+- [ ] PDF `vlm_blocks` mode — run full pipeline, audit skill steps, fix any gaps, evaluate quality
+- [ ] PDF `page_image` mode — run full pipeline, audit skill steps, fix any gaps, evaluate quality
+- [ ] **Entity graph MCP end-to-end test** — run entity extraction on docling-ingested docs, audit skill steps, fix gaps (tool names, convert_schema flow, relationship creation)
 - [x] **Validate reading order correctness** — docling mode, 5 PDFs (2026-03-20)
   - **Result:** Pages always in correct order. Bug is isolated to right-column sidebar elements leaking into next page's element chain (multi-column journal articles only)
   - Single-column docs (jciinsight, nihms, fendo) are fully clean
@@ -56,7 +121,7 @@ _(nothing — ready for next test run)_
 
 ### Skill / server improvements identified (from runs 1–4)
 - [ ] Add `relationships_only` pass trigger to Step 7 of `build-pdf-chatbot` skill
-  - Currently blocked: `pass_type="relationships_only"` not implemented in entity-graph v1
+  - Blocked: `pass_type="relationships_only"` not yet implemented in entity-graph (future work); unimplemented variants removed from tool description so agents won't suggest them
 - [ ] Update skill Step 8 to pre-fetch vector index name via `get_neo4j_schema_and_indexes` *(flagged runs 1+3)*
 - [ ] Remove `check_processing_status` after `embed_chunks` from skill (synchronous tool) *(flagged runs 1+3)*
 - [ ] Add `.strip().lower()` validator to key properties in schemas (soft duplicate fix) *(flagged runs 1+3)*
@@ -114,7 +179,7 @@ _(nothing — ready for next test run)_
 - [x] **Run 2: 5-company page_image test** (Pfizer, Bayer, AbbVie, BMS, J&J)
   - 1596 unique entities, 1807 relationships from 102 chunks
   - Gap: TARGETS=3, HAS_MOA=13, J&J IN_PHASE=0
-  - `pass_type="relationships_only"` not yet implemented in entity-graph v1
+  - `pass_type="relationships_only"` not yet implemented in entity-graph (unimplemented variants removed from tool description — future work)
   - Report: `outputs/reports/pharma_pipeline_5company_chatbot_report.md`
 - [x] Committed and pushed all changes to GitHub
 
