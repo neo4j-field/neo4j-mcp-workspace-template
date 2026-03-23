@@ -29,7 +29,7 @@ Process:
 * Make any necessary changes and repeat step 2
 
 ## Final Data Model
-* If no changes are necessary, then persist the data model as json in `data_models/`
+* If no changes are necessary, then persist the data model as json in `outputs/data_models/`
 
 ---
 

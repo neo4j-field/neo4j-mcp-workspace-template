@@ -5,7 +5,7 @@ Tools:
 - check_processing_status: Monitor background job progress
 - cancel_job: Cancel a running background job
 - chunk_lexical_graph: Create Chunk nodes from Elements in the graph
-- embed_chunks: Add embeddings to Chunk nodes
+- embed_chunks: Add embeddings to nodes (generic: any label, any text property)
 - verify_lexical_graph: Structural checks + content reconstruction
 - list_documents: Inventory of documents in the graph
 - delete_document: Remove a document version with cascade
@@ -57,7 +57,6 @@ from .graph_reader import (
 )
 from .graph_writer import (
     deactivate_versions,
-    ensure_constraints,
     get_existing_versions,
     write_parsed_document,
 )
@@ -97,6 +96,26 @@ _WARNING_THRESHOLD_SECONDS = 120
 DEFAULT_EXTRACTION_MODEL = "gpt-5-mini"
 
 
+def _suggest_max_workers() -> int:
+    """Auto-detect optimal ProcessPoolExecutor worker count based on available hardware.
+
+    Docling loads neural network models (~1.5 GB RAM per worker) and is CPU-bound.
+    We cap at 4 workers: diminishing returns beyond that for model inference.
+    """
+    try:
+        import psutil
+        available_ram_gb = psutil.virtual_memory().available / (1024 ** 3)
+        ram_limited = max(1, int(available_ram_gb / 1.5))
+    except ImportError:
+        ram_limited = 2  # conservative fallback if psutil unavailable
+
+    cpu_count = os.cpu_count() or 1
+    cpu_limited = max(1, cpu_count - 2)  # leave 2 cores for event loop + Neo4j writes
+
+    suggested = min(ram_limited, cpu_limited, 4)
+    return max(1, suggested)
+
+
 def create_mcp_server(
     neo4j_driver: AsyncDriver,
     database: str = "neo4j",
@@ -111,7 +130,8 @@ def create_mcp_server(
 
     # Use provided or create defaults
     _job_manager = job_manager or JobManager()
-    _process_pool = process_pool or ProcessPoolExecutor(max_workers=2)
+    _auto_workers = _suggest_max_workers()
+    _process_pool = process_pool or ProcessPoolExecutor(max_workers=_auto_workers)
 
     # ===========================================================
     # TOOL 1: create_lexical_graph (always async / background)
@@ -134,7 +154,7 @@ def create_mcp_server(
             None, description="Custom sourceId (defaults to filename). Ignored for folders."
         ),
         parse_mode: str = Field(
-            "pymupdf", description="Parse mode: 'pymupdf', 'docling', 'page_image', or 'vlm_blocks'"
+            "pymupdf", description="Parse mode: 'pymupdf', 'docling', 'page_image', or 'vlm_blocks' (experimental — prefer docling)"
         ),
         store_page_images: bool = Field(
             False, description="Render and store page images on Page nodes"
@@ -169,6 +189,14 @@ def create_mcp_server(
         text_preview_length: int = Field(
             200, description="Characters of text preview sent to VLM per block (vlm_blocks mode)"
         ),
+        max_parallel: int = Field(
+            0,
+            description=(
+                "Max documents to parse concurrently (docling/pymupdf modes). "
+                "0 = auto-detect based on available RAM and CPU cores. "
+                "vlm_blocks always runs sequentially."
+            ),
+        ),
     ) -> str:
         """Parse PDF(s) and create the lexical graph in Neo4j.
 
@@ -180,7 +208,7 @@ def create_mcp_server(
           Set extract_images=False and extract_tables=False for text-only (Document + Chunk only).
         - docling: Full layout analysis with sections, tables, captions. (requires docling extra)
         - page_image: Page images + text. Creates Document + Page nodes for VLM use.
-        - vlm_blocks: PyMuPDF blocks + VLM reading order/classification. Creates Document + Page + Element + Section nodes.
+        - vlm_blocks: [EXPERIMENTAL — prefer docling] PyMuPDF blocks + VLM reading order/classification. Creates Document + Page + Element + Section nodes.
 
         **Returns immediately** with a job_id. Use check_processing_status(job_id) to monitor.
         """
@@ -215,9 +243,14 @@ def create_mcp_server(
             file_page_counts.append((str(pdf), pc))
             total_pages += pc
 
-        # Estimate processing time
+        # Resolve effective parallelism for this job
+        effective_parallel = max_parallel if max_parallel > 0 else _suggest_max_workers()
+        if parse_mode == "vlm_blocks":
+            effective_parallel = 1  # vlm_blocks is always sequential
+
+        # Estimate processing time (adjusted for parallelism)
         rate = _TIME_PER_PAGE.get(parse_mode, 10.0)
-        estimated_seconds = total_pages * rate
+        estimated_seconds = (total_pages * rate) / effective_parallel
         estimated_minutes = round(estimated_seconds / 60, 1)
 
         # Create the job
@@ -261,6 +294,7 @@ def create_mcp_server(
                 document_id=document_id,
                 parse_kwargs=parse_kwargs,
                 extraction_model=extraction_model,
+                max_parallel=effective_parallel,
             )
         )
         _job_manager.register_task(job.id, task)
@@ -272,6 +306,7 @@ def create_mcp_server(
             "files_total": files_total,
             "total_pages": total_pages,
             "estimated_minutes": estimated_minutes,
+            "max_parallel": effective_parallel,
             "message": (
                 f"Job queued. Use check_processing_status('{job.id}') to monitor."
             ),
@@ -387,7 +422,7 @@ def create_mcp_server(
         return json.dumps(result, indent=2)
 
     # ===========================================================
-    # TOOL 4 (was 2): chunk_lexical_graph
+    # TOOL 4: chunk_lexical_graph
     # ===========================================================
 
     @mcp.tool(
@@ -503,160 +538,65 @@ def create_mcp_server(
             raise ToolError(f"Chunking failed: {e}")
 
     # ===========================================================
-    # TOOL 3: embed_chunks
+    # TOOL 5: list_documents
     # ===========================================================
 
     @mcp.tool(
-        name="embed_chunks",
+        name="list_documents",
         annotations=ToolAnnotations(
-            title="Embed Chunks",
-            readOnlyHint=False,
+            title="List Documents",
+            readOnlyHint=True,
             destructiveHint=False,
             idempotentHint=True,
             openWorldHint=False,
         ),
     )
-    async def embed_chunks(
-        document_id: Optional[str] = Field(
-            None, description="Document ID to embed chunks for. None = all active chunks without embeddings."
-        ),
-        parallel: int = Field(10, description="Max concurrent embedding batches"),
-        model: str = Field(
-            default=embedding_model, description="Embedding model (via LiteLLM)"
-        ),
-        create_fulltext_index: bool = Field(
-            True, description="Create fulltext index on chunk text"
-        ),
-    ) -> str:
-        """Add embeddings to active Chunk nodes that don't have them yet.
-
-        Composes the embedding input per mode:
-        - Text chunks: documentName + sectionContext + text
-        - Visual nodes (Image/Table/Page) with textDescription: documentName + sectionContext + textDescription
-        - Visual nodes without textDescription: skipped
-
-        Uses native VECTOR type and creates a vector index with documentName
-        prefilter for efficient filtered search.
-        """
+    async def list_documents_tool() -> str:
+        """List all documents in the graph, grouped by sourceId with version info."""
         try:
-            # Mode-aware query: compose embedding input from the right fields.
-            # Visual nodes without textDescription are excluded (contentToEmbed = null).
-            _embed_select = """
-                WITH c,
-                  CASE
-                    WHEN c.textDescription IS NOT NULL THEN c.textDescription
-                    WHEN c:Image OR c:Table OR c:Page THEN null
-                    ELSE c.text
-                  END AS contentToEmbed
-                WHERE contentToEmbed IS NOT NULL
-                RETURN c.id AS id,
-                  trim(
-                    coalesce(c.documentName, '') + ' '
-                    + coalesce(c.sectionContext, '') + ' '
-                    + contentToEmbed
-                  ) AS text,
-                  c.documentName AS documentName
-            """
+            docs = await list_all_documents(neo4j_driver, database)
+            if not docs:
+                return json.dumps({"status": "success", "documents": [], "message": "No documents in graph."})
 
-            if document_id:
-                query = f"""
-                    MATCH (c:Chunk)
-                    WHERE c.text_embedding IS NULL
-                      AND c.id STARTS WITH $docIdPrefix
-                    {_embed_select}
-                """
-                params: dict[str, Any] = {"docIdPrefix": document_id + "_"}
-            else:
-                query = f"""
-                    MATCH (c:Chunk)
-                    WHERE c.text_embedding IS NULL
-                      AND coalesce(c.active, true) = true
-                    {_embed_select}
-                """
-                params = {}
+            # Group by sourceId
+            grouped: dict[str, list[dict[str, Any]]] = {}
+            for d in docs:
+                sid = d.get("sourceId", d["id"])
+                grouped.setdefault(sid, []).append(d)
 
-            async with neo4j_driver.session(database=database) as session:
-                result = await session.run(query, **params)
-                records = await result.data()
+            output = []
+            for sid, versions in grouped.items():
+                output.append(
+                    {
+                        "sourceId": sid,
+                        "name": versions[0].get("name"),
+                        "source": versions[0].get("source"),
+                        "versions": [
+                            {
+                                "id": v["id"],
+                                "version": v.get("version"),
+                                "active": v.get("active"),
+                                "parseMode": v.get("parseMode"),
+                                "pages": v.get("pageCount"),
+                                "elements": v.get("elementCount"),
+                                "sections": v.get("sectionCount"),
+                                "chunks": v.get("totalChunkCount"),
+                                "hasEmbeddings": v.get("hasEmbeddings"),
+                                "createdAt": v.get("createdAt"),
+                            }
+                            for v in versions
+                        ],
+                    }
+                )
 
-            if not records:
-                return json.dumps({"status": "success", "message": "No chunks need embedding.", "embedded": 0})
-
-            logger.info(f"Embedding {len(records)} chunks")
-
-            embedder = ChunkEmbedder(model=model)
-            pairs = [(r["id"], r["text"]) for r in records]
-            embedded = await embedder.embed_many(pairs, parallel=parallel)
-
-            # Write embeddings using native VECTOR type
-            total_updated = 0
-            dims = len(embedded[0][1]) if embedded else 0
-            batch_size = 100
-            for i in range(0, len(embedded), batch_size):
-                batch = [{"id": eid, "embedding": emb} for eid, emb in embedded[i : i + batch_size]]
-                async with neo4j_driver.session(database=database) as session:
-                    result = await session.run(
-                        """
-                        CYPHER 25
-                        UNWIND $embeddings AS item
-                        MATCH (c:Chunk {id: item.id})
-                        SET c.text_embedding = vector(item.embedding, $dims, FLOAT32)
-                        RETURN count(c) AS updated
-                        """,
-                        embeddings=batch,
-                        dims=dims,
-                    )
-                    record = await result.single()
-                    total_updated += record["updated"] if record else 0
-
-            # Create vector index with documentName prefilter (Cypher 25)
-            if dims > 0:
-                try:
-                    async with neo4j_driver.session(database=database) as session:
-                        await session.run(
-                            f"""
-                            CYPHER 25
-                            CREATE VECTOR INDEX chunk_text_embedding IF NOT EXISTS
-                            FOR (c:Chunk) ON c.text_embedding
-                            WITH [c.documentName]
-                            OPTIONS {{indexConfig: {{
-                                `vector.dimensions`: $dims,
-                                `vector.similarity_function`: 'cosine'
-                            }}}}
-                            """,
-                            dims=dims,
-                        )
-                except Exception as e:
-                    logger.warning(f"Vector index note: {e}")
-
-            if create_fulltext_index:
-                try:
-                    async with neo4j_driver.session(database=database) as session:
-                        await session.run(
-                            "CREATE FULLTEXT INDEX chunk_text_fulltext IF NOT EXISTS "
-                            "FOR (c:Chunk) ON EACH [c.text]"
-                        )
-                except Exception as e:
-                    logger.warning(f"Fulltext index note: {e}")
-
-            return json.dumps(
-                {
-                    "status": "success",
-                    "model": model,
-                    "embedded": total_updated,
-                    "dimensions": dims,
-                    "message": f"Embedded {total_updated} chunks (VECTOR FLOAT32, {dims}d). "
-                               f"Vector index with documentName prefilter created.",
-                },
-                indent=2,
-            )
+            return json.dumps({"status": "success", "documents": output}, indent=2)
 
         except Exception as e:
-            logger.error("Embedding failed", error=str(e))
-            raise ToolError(f"Embedding failed: {e}")
+            logger.error("list_documents failed", error=str(e))
+            raise ToolError(f"Failed: {e}")
 
     # ===========================================================
-    # TOOL 4: verify_lexical_graph
+    # TOOL 6: verify_lexical_graph
     # ===========================================================
 
     @mcp.tool(
@@ -1004,107 +944,532 @@ def create_mcp_server(
             raise ToolError(f"Verification failed: {e}")
 
     # ===========================================================
-    # TOOL 5: list_documents
+    # TOOL 7: assign_section_hierarchy
     # ===========================================================
 
     @mcp.tool(
-        name="list_documents",
+        name="assign_section_hierarchy",
         annotations=ToolAnnotations(
-            title="List Documents",
-            readOnlyHint=True,
+            title="Assign Section Hierarchy",
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+    )
+    async def assign_section_hierarchy_tool(
+        document_id: Optional[str] = Field(
+            None,
+            description=(
+                "Document version id to process. "
+                "If omitted, runs on all active documents in parallel (LLM mode only)."
+            ),
+        ),
+        model: Optional[str] = Field(
+            None,
+            description="LLM model to use (defaults to EXTRACTION_MODEL env var)",
+        ),
+        hierarchy: Optional[str] = Field(
+            None,
+            description=(
+                'Optional: agent-provided hierarchy as JSON string, e.g. '
+                '\'[{"id": "doc_v1_sec_0", "level": 1}, {"id": "doc_v1_sec_1", "level": 2}]\'. '
+                "When provided, skips the LLM call and applies these levels directly. "
+                "Requires document_id (agent mode cannot run on all docs at once)."
+            ),
+        ),
+    ) -> str:
+        """Use LLM to assign proper heading levels to sections, rebuild HAS_SUBSECTION, and propagate heading chains to chunks.
+
+        Fixes Docling's flat level=1 sections. After running:
+        - Section.level values reflect the real document hierarchy
+        - HAS_SUBSECTION relationships link parent to child sections
+        - Active Chunk.sectionContext contains the full heading chain (e.g., "Chapter 1 > Section 1.1 > Sub 1.1.1")
+
+        Two modes:
+        - LLM mode (default): automatically infers hierarchy using the configured LLM.
+          When document_id is None, runs on ALL active documents concurrently.
+        - Agent mode: pass a hierarchy JSON to apply levels directly (no LLM call).
+          Requires document_id. If the LLM call fails, returns sections for the agent to decide.
+        """
+        try:
+            use_model = model or extraction_model
+
+            # Agent mode requires a specific document
+            if hierarchy and not document_id:
+                raise ToolError(
+                    "document_id is required when providing a hierarchy JSON (agent mode). "
+                    "Agent mode cannot run on all documents at once."
+                )
+
+            parsed_hierarchy = None
+            if hierarchy:
+                try:
+                    parsed_hierarchy = json.loads(hierarchy)
+                except json.JSONDecodeError as e:
+                    raise ToolError(f"Invalid hierarchy JSON: {e}")
+
+            # Single-document path
+            if document_id:
+                doc = await get_document(neo4j_driver, database, document_id)
+                if not doc:
+                    raise ToolError(f"Document not found: {document_id}")
+                doc_name = doc.get("name", document_id)
+                result = await _assign_hierarchy(
+                    neo4j_driver, database, document_id, doc_name,
+                    model=use_model, hierarchy=parsed_hierarchy,
+                )
+                if "error" in result:
+                    raise ToolError(result["error"])
+                return json.dumps(result, indent=2, default=str)
+
+            # All-documents path: parallel LLM calls
+            all_docs = await list_all_documents(neo4j_driver, database)
+            active_docs = [d for d in all_docs if d.get("active")]
+            if not active_docs:
+                return json.dumps({"message": "No active documents found."})
+
+            async def _process_one(doc: dict) -> dict:
+                doc_id = doc["id"]
+                doc_name = doc.get("name", doc_id)
+                try:
+                    result = await _assign_hierarchy(
+                        neo4j_driver, database, doc_id, doc_name,
+                        model=use_model, hierarchy=None,
+                    )
+                    return {"document_id": doc_id, "document_name": doc_name, **result}
+                except Exception as exc:
+                    return {"document_id": doc_id, "document_name": doc_name, "error": str(exc)}
+
+            results = await asyncio.gather(*[_process_one(d) for d in active_docs])
+            successes = [r for r in results if "error" not in r]
+            failures = [r for r in results if "error" in r]
+            return json.dumps(
+                {
+                    "documents_processed": len(active_docs),
+                    "succeeded": len(successes),
+                    "failed": len(failures),
+                    "results": list(results),
+                },
+                indent=2,
+                default=str,
+            )
+
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error("assign_section_hierarchy failed", error=str(e))
+            raise ToolError(f"Failed: {e}")
+
+    # ===========================================================
+    # TOOL 8: generate_chunk_descriptions
+    # ===========================================================
+
+    @mcp.tool(
+        name="generate_chunk_descriptions",
+        annotations=ToolAnnotations(
+            title="Generate Chunk Descriptions",
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+    )
+    async def generate_chunk_descriptions_tool(
+        document_id: Optional[str] = Field(
+            None,
+            description=(
+                "Document version id to process. "
+                "None (default) = run for all active documents in the graph."
+            ),
+        ),
+        model: Optional[str] = Field(
+            None,
+            description="VLM model for description generation (defaults to EXTRACTION_MODEL env var, must support vision)",
+        ),
+        parallel: int = Field(
+            5, description="Max concurrent VLM calls"
+        ),
+    ) -> str:
+        """Generate text descriptions for image/table chunks using a Vision Language Model.
+
+        Works with both docling and pymupdf parse modes:
+        - Docling: image/table chunks have imageBase64 directly
+        - PyMuPDF: chunks link to Image/Table nodes via HAS_ELEMENT
+
+        After running:
+        - Chunk.textDescription stores the VLM description
+        - Chunk.text is NOT modified (stays as original extracted content)
+        - (PyMuPDF mode) Image/Table nodes receive the :Chunk label, documentName, active
+        - (Page-image mode) Page nodes receive the :Chunk label
+
+        When document_id is None, runs for all active documents sequentially.
+        """
+        try:
+            use_model = model or extraction_model
+
+            if document_id is not None:
+                # Single document
+                doc = await get_document(neo4j_driver, database, document_id)
+                if not doc:
+                    raise ToolError(f"Document not found: {document_id}")
+                result = await _generate_descriptions(
+                    neo4j_driver, database, document_id, model=use_model, parallel=parallel
+                )
+                if "error" in result:
+                    raise ToolError(result["error"])
+                return json.dumps(result, indent=2, default=str)
+
+            else:
+                # All active documents
+                all_docs = await list_all_documents(neo4j_driver, database)
+                active_docs = [d for d in all_docs if d.get("active", False)]
+                if not active_docs:
+                    return json.dumps({"status": "success", "message": "No active documents found.", "documents_processed": 0})
+
+                results = []
+                total_chunks = 0
+                total_failed = 0
+                for doc in active_docs:
+                    doc_id = doc["id"]
+                    r = await _generate_descriptions(
+                        neo4j_driver, database, doc_id, model=use_model, parallel=parallel
+                    )
+                    results.append({"document_id": doc_id, **r})
+                    total_chunks += r.get("chunks_processed", 0)
+                    total_failed += r.get("chunks_failed", 0)
+
+                return json.dumps({
+                    "status": "success",
+                    "documents_processed": len(active_docs),
+                    "total_chunks_processed": total_chunks,
+                    "total_chunks_failed": total_failed,
+                    "model": use_model,
+                    "results": results,
+                }, indent=2, default=str)
+
+        except ToolError:
+            raise
+        except Exception as e:
+            logger.error("generate_chunk_descriptions failed", error=str(e))
+            raise ToolError(f"Failed: {e}")
+
+    # ===========================================================
+    # TOOL 9: embed_chunks
+    # ===========================================================
+
+    @mcp.tool(
+        name="embed_chunks",
+        annotations=ToolAnnotations(
+            title="Embed Chunks",
+            readOnlyHint=False,
             destructiveHint=False,
             idempotentHint=True,
             openWorldHint=False,
         ),
     )
-    async def list_documents_tool() -> str:
-        """List all documents in the graph, grouped by sourceId with version info."""
-        try:
-            docs = await list_all_documents(neo4j_driver, database)
-            if not docs:
-                return json.dumps({"status": "success", "documents": [], "message": "No documents in graph."})
-
-            # Group by sourceId
-            grouped: dict[str, list[dict[str, Any]]] = {}
-            for d in docs:
-                sid = d.get("sourceId", d["id"])
-                grouped.setdefault(sid, []).append(d)
-
-            output = []
-            for sid, versions in grouped.items():
-                output.append(
-                    {
-                        "sourceId": sid,
-                        "name": versions[0].get("name"),
-                        "source": versions[0].get("source"),
-                        "versions": [
-                            {
-                                "id": v["id"],
-                                "version": v.get("version"),
-                                "active": v.get("active"),
-                                "parseMode": v.get("parseMode"),
-                                "pages": v.get("pageCount"),
-                                "elements": v.get("elementCount"),
-                                "sections": v.get("sectionCount"),
-                                "chunks": v.get("totalChunkCount"),
-                                "hasEmbeddings": v.get("hasEmbeddings"),
-                                "createdAt": v.get("createdAt"),
-                            }
-                            for v in versions
-                        ],
-                    }
-                )
-
-            return json.dumps({"status": "success", "documents": output}, indent=2)
-
-        except Exception as e:
-            logger.error("list_documents failed", error=str(e))
-            raise ToolError(f"Failed: {e}")
-
-    # ===========================================================
-    # TOOL 6: delete_document
-    # ===========================================================
-
-    @mcp.tool(
-        name="delete_document",
-        annotations=ToolAnnotations(
-            title="Delete Document",
-            readOnlyHint=False,
-            destructiveHint=True,
-            idempotentHint=True,
-            openWorldHint=False,
+    async def embed_chunks(
+        node_label: str = Field(
+            "Chunk",
+            description=(
+                "Node label to embed. Default: 'Chunk'. "
+                "Can be any label (e.g. 'Image', 'Table', 'Page', or custom labels). "
+                "After generate_chunk_descriptions, Image/Table/Page nodes also have the :Chunk label "
+                "and can be embedded together with text chunks using text_property_fallback."
+            ),
         ),
-    )
-    async def delete_document(
-        document_id: str = Field(..., description="Document version id to delete"),
-    ) -> str:
-        """Delete a document version and ALL its children (pages, elements, sections, chunks, TOC entries)."""
-        try:
-            doc = await get_document(neo4j_driver, database, document_id)
-            if not doc:
-                raise ToolError(f"Document not found: {document_id}")
-
-            counts = await delete_document_cascade(
-                neo4j_driver, database, document_id
+        text_property: str = Field(
+            "text",
+            description=(
+                "Primary property to embed. Default: 'text'. "
+                "For Image/Table/Page nodes use 'textDescription' (set by generate_chunk_descriptions). "
+                "When text_property_fallback is set, COALESCE(text_property, text_property_fallback) is used — "
+                "nodes where both are null are skipped."
+            ),
+        ),
+        text_property_fallback: Optional[str] = Field(
+            None,
+            description=(
+                "Fallback text property when text_property is null on a node. "
+                "When set, embeds COALESCE(text_property, text_property_fallback). "
+                "Use text_property='textDescription', text_property_fallback='text' to prefer VLM descriptions "
+                "for Image/Table nodes while still embedding raw text for regular Chunk nodes — "
+                "all in one unified index."
+            ),
+        ),
+        context_properties: list[str] = Field(
+            default=["documentName", "sectionContext"],
+            description=(
+                "Properties prepended to the text before embedding, in order. "
+                "Default: ['documentName', 'sectionContext']. "
+                "Missing properties are skipped. Set to [] to embed text_property alone."
+            ),
+        ),
+        index_prefilter_properties: Optional[list[str]] = Field(
+            default=["documentName", "type"],
+            description=(
+                "Properties used as prefilters on the vector index for efficient filtered search. "
+                "Default: ['documentName', 'type']. Supports multiple properties (Neo4j 5.18+ WITH [...] syntax). "
+                "Set to null or [] to create a plain vector index with no prefilter."
+            ),
+        ),
+        document_id: Optional[str] = Field(
+            None,
+            description=(
+                "Filter to a specific document: only embeds nodes where documentName = document_id. "
+                "None = all active nodes without embeddings."
+            ),
+        ),
+        overwrite: bool = Field(
+            False,
+            description="Re-embed nodes that already have embeddings. Default: false (skip already-embedded nodes).",
+        ),
+        parallel: int = Field(10, description="Max concurrent embedding batches"),
+        model: str = Field(
+            default=embedding_model, description="Embedding model (via LiteLLM)"
+        ),
+        create_fulltext_index: bool = Field(
+            True, description=(
+                "Create fulltext index on text_property (and text_property_fallback if set) "
+                "of the node_label"
             )
+        ),
+    ) -> str:
+        """Embed a text property on any node label and store as a vector index.
 
+        Composes the embedding input as: context_properties (joined) + text_property.
+        When text_property_fallback is set, uses COALESCE(text_property, text_property_fallback)
+        per node — nodes where both are null are skipped.
+
+        **Recommended usage after generate_chunk_descriptions (pymupdf with images/tables):**
+          text_property='textDescription', text_property_fallback='text'
+          → Table/Image nodes: embedded from VLM description (textDescription)
+          → Regular Chunk nodes: embedded from raw extracted text (text)
+          → All stored in one unified chunk_text_embedding index
+
+        **Minimal usage (text-only docs, no images/tables):**
+          Use defaults — text_property='text', no fallback needed.
+          Auto-detection: if defaults are used and any Chunk node has textDescription set
+          (i.e. generate_chunk_descriptions was run), automatically switches to
+          text_property='textDescription' + text_property_fallback='text'. The output
+          reports auto_detected_fallback=true when this happens.
+
+        **Prefilter (index_prefilter_properties):**
+          Adds metadata properties to the vector index for efficient filtered search.
+          Default ['documentName', 'type'] lets you search within a document or by node type
+          (e.g. only table descriptions, only text chunks).
+          Uses Neo4j 5.18+ WITH [...] syntax — requires Neo4j 5.18 or later.
+
+        **Fulltext index:**
+          Created on text_property (and text_property_fallback if set), covering both raw text
+          and VLM descriptions in one index.
+
+        **Index names:**
+          Vector: {node_label.lower()}_text_embedding
+          Fulltext: {node_label.lower()}_text_fulltext
+
+        Synchronous — no status poll needed.
+        """
+        # Warn early if likely misconfiguration: visual node labels with 'text' but no fallback
+        visual_labels = {"Image", "Table", "Page"}
+        if node_label in visual_labels and text_property == "text" and not text_property_fallback:
+            return json.dumps({
+                "status": "warning",
+                "message": (
+                    f"node_label='{node_label}' has no 'text' property. "
+                    f"These nodes use 'textDescription' (set by generate_chunk_descriptions). "
+                    f"Re-run with text_property='textDescription' to embed {node_label} nodes."
+                ),
+                "embedded": 0,
+            })
+
+        # Auto-detect: if defaults are unchanged (text_property='text', no fallback),
+        # check whether any Chunk has textDescription — if so, auto-enable the fallback
+        # so Table/Image VLM descriptions are included without requiring explicit parameters.
+        auto_detected_fallback = False
+        if text_property == "text" and text_property_fallback is None and node_label == "Chunk":
+            try:
+                async with neo4j_driver.session(database=database) as session:
+                    result = await session.run(
+                        "MATCH (c:Chunk) WHERE c.textDescription IS NOT NULL RETURN c LIMIT 1"
+                    )
+                    record = await result.single()
+                    if record is not None:
+                        text_property = "textDescription"
+                        text_property_fallback = "text"
+                        auto_detected_fallback = True
+            except Exception:
+                pass  # detection failure is non-fatal, proceed with original values
+
+        try:
+            # Build text expression: COALESCE when fallback is provided
+            if text_property_fallback:
+                text_expr = f"coalesce(c.`{text_property}`, c.`{text_property_fallback}`)"
+                text_not_null = f"(c.`{text_property}` IS NOT NULL OR c.`{text_property_fallback}` IS NOT NULL)"
+            else:
+                text_expr = f"c.`{text_property}`"
+                text_not_null = f"c.`{text_property}` IS NOT NULL"
+
+            # Build context concatenation dynamically
+            context_parts = " + ' ' + ".join(
+                f"coalesce(c.`{p}`, '')" for p in context_properties
+            )
+            if context_parts:
+                composed_text = f"trim({context_parts} + ' ' + {text_expr})"
+            else:
+                composed_text = text_expr
+
+            # Build WHERE clause
+            embedding_prop = "text_embedding"
+            where_clauses = [text_not_null]
+            if not overwrite:
+                where_clauses.append(f"c.`{embedding_prop}` IS NULL")
+            if document_id:
+                where_clauses.append("c.documentName = $document_id")
+            elif node_label == "Chunk":
+                # active filter is only meaningful for Chunk nodes (versioned)
+                where_clauses.append("coalesce(c.active, true) = true")
+
+            where_str = " AND ".join(where_clauses)
+
+            # Use elementId(c) as the stable identifier — works for any node label
+            # including entity nodes that have no 'id' property.
+            query = f"""
+                MATCH (c:`{node_label}`)
+                WHERE {where_str}
+                RETURN elementId(c) AS eid,
+                  {composed_text} AS text
+            """
+            params: dict[str, Any] = {}
+            if document_id:
+                params["document_id"] = document_id
+
+            async with neo4j_driver.session(database=database) as session:
+                result = await session.run(query, **params)
+                records = await result.data()
+
+            if not records:
+                return json.dumps({
+                    "status": "success",
+                    "message": f"No {node_label} nodes need embedding.",
+                    "embedded": 0,
+                })
+
+            logger.info(f"Embedding {len(records)} {node_label} nodes")
+
+            embedder = ChunkEmbedder(model=model)
+            pairs = [(r["eid"], r["text"]) for r in records]
+            embedded = await embedder.embed_many(pairs, parallel=parallel)
+
+            # Write embeddings using native VECTOR type, matched by elementId
+            total_updated = 0
+            dims = len(embedded[0][1]) if embedded else 0
+            batch_size = 100
+            for i in range(0, len(embedded), batch_size):
+                batch = [{"eid": eid, "embedding": emb} for eid, emb in embedded[i : i + batch_size]]
+                async with neo4j_driver.session(database=database) as session:
+                    result = await session.run(
+                        f"""
+                        CYPHER 25
+                        UNWIND $embeddings AS item
+                        MATCH (c:`{node_label}`)
+                        WHERE elementId(c) = item.eid
+                        SET c.`{embedding_prop}` = vector(item.embedding, $dims, FLOAT32)
+                        RETURN count(c) AS updated
+                        """,
+                        embeddings=batch,
+                        dims=dims,
+                    )
+                    record = await result.single()
+                    total_updated += record["updated"] if record else 0
+
+            # Create vector index
+            index_name = f"{node_label.lower()}_{embedding_prop}"
+            if dims > 0:
+                try:
+                    async with neo4j_driver.session(database=database) as session:
+                        prefilter_props = index_prefilter_properties or []
+                        if prefilter_props:
+                            prefilter_list = ", ".join(f"c.`{p}`" for p in prefilter_props)
+                            await session.run(
+                                f"""
+                                CYPHER 25
+                                CREATE VECTOR INDEX `{index_name}` IF NOT EXISTS
+                                FOR (c:`{node_label}`) ON c.`{embedding_prop}`
+                                WITH [{prefilter_list}]
+                                OPTIONS {{indexConfig: {{
+                                    `vector.dimensions`: $dims,
+                                    `vector.similarity_function`: 'cosine'
+                                }}}}
+                                """,
+                                dims=dims,
+                            )
+                        else:
+                            await session.run(
+                                f"""
+                                CYPHER 25
+                                CREATE VECTOR INDEX `{index_name}` IF NOT EXISTS
+                                FOR (c:`{node_label}`) ON c.`{embedding_prop}`
+                                OPTIONS {{indexConfig: {{
+                                    `vector.dimensions`: $dims,
+                                    `vector.similarity_function`: 'cosine'
+                                }}}}
+                                """,
+                                dims=dims,
+                            )
+                except Exception as e:
+                    logger.warning(f"Vector index note: {e}")
+
+            if create_fulltext_index:
+                # Index the resolved text property(ies) for fulltext search
+                ft_props = [text_property]
+                if text_property_fallback and text_property_fallback not in ft_props:
+                    ft_props.append(text_property_fallback)
+                fulltext_index_name = f"{node_label.lower()}_text_fulltext"
+                ft_prop_list = ", ".join(f"c.`{p}`" for p in ft_props)
+                try:
+                    async with neo4j_driver.session(database=database) as session:
+                        await session.run(
+                            f"CREATE FULLTEXT INDEX `{fulltext_index_name}` IF NOT EXISTS "
+                            f"FOR (c:`{node_label}`) ON EACH [{ft_prop_list}]"
+                        )
+                except Exception as e:
+                    logger.warning(f"Fulltext index note: {e}")
+
+            prefilter_props = index_prefilter_properties or []
+            prefilter_msg = f" with {prefilter_props} prefilter" if prefilter_props else ""
+            auto_msg = (
+                " (auto-detected textDescription on Chunk nodes — "
+                "using textDescription with text fallback)"
+                if auto_detected_fallback else ""
+            )
             return json.dumps(
                 {
                     "status": "success",
-                    "document_id": document_id,
-                    "deleted": counts,
-                    "message": f"Deleted document {document_id} and all children.",
+                    "node_label": node_label,
+                    "text_property": text_property,
+                    "text_property_fallback": text_property_fallback,
+                    "context_properties": context_properties,
+                    "index_prefilter_properties": prefilter_props,
+                    "auto_detected_fallback": auto_detected_fallback,
+                    "model": model,
+                    "embedded": total_updated,
+                    "dimensions": dims,
+                    "vector_index": index_name,
+                    "message": (
+                        f"Embedded {total_updated} {node_label} nodes (VECTOR FLOAT32, {dims}d). "
+                        f"Vector index '{index_name}'{prefilter_msg} created.{auto_msg}"
+                    ),
                 },
                 indent=2,
             )
-        except ToolError:
-            raise
+
         except Exception as e:
-            logger.error("delete_document failed", error=str(e))
-            raise ToolError(f"Failed: {e}")
+            logger.error("Embedding failed", error=str(e))
+            raise ToolError(f"Embedding failed: {e}")
 
     # ===========================================================
-    # TOOL 7: set_active_version
+    # TOOL 10: set_active_version
     # ===========================================================
 
     @mcp.tool(
@@ -1174,7 +1539,7 @@ def create_mcp_server(
             raise ToolError(f"Failed: {e}")
 
     # ===========================================================
-    # TOOL 8: clean_inactive
+    # TOOL 11: clean_inactive
     # ===========================================================
 
     @mcp.tool(
@@ -1253,132 +1618,45 @@ def create_mcp_server(
             raise ToolError(f"Failed: {e}")
 
     # ===========================================================
-    # POST-PROCESSING: Assign Section Hierarchy
+    # TOOL 12: delete_document
     # ===========================================================
 
     @mcp.tool(
-        name="assign_section_hierarchy",
+        name="delete_document",
         annotations=ToolAnnotations(
-            title="Assign Section Hierarchy",
+            title="Delete Document",
             readOnlyHint=False,
-            destructiveHint=False,
+            destructiveHint=True,
             idempotentHint=True,
-            openWorldHint=True,
+            openWorldHint=False,
         ),
     )
-    async def assign_section_hierarchy_tool(
-        document_id: str = Field(..., description="Document version id to process"),
-        model: Optional[str] = Field(
-            None,
-            description="LLM model to use (defaults to EXTRACTION_MODEL env var)",
-        ),
-        hierarchy: Optional[str] = Field(
-            None,
-            description=(
-                'Optional: agent-provided hierarchy as JSON string, e.g. '
-                '\'[{"id": "doc_v1_sec_0", "level": 1}, {"id": "doc_v1_sec_1", "level": 2}]\'. '
-                "When provided, skips the LLM call and applies these levels directly."
-            ),
-        ),
+    async def delete_document(
+        document_id: str = Field(..., description="Document version id to delete"),
     ) -> str:
-        """Use LLM to assign proper heading levels to sections, rebuild HAS_SUBSECTION, and propagate heading chains to chunks.
-
-        Fixes Docling's flat level=1 sections. After running:
-        - Section.level values reflect the real document hierarchy
-        - HAS_SUBSECTION relationships link parent to child sections
-        - Active Chunk.sectionContext contains the full heading chain (e.g., "Chapter 1 > Section 1.1 > Sub 1.1.1")
-
-        Two modes:
-        - LLM mode (default): automatically infers hierarchy using the configured LLM.
-        - Agent mode: pass a hierarchy JSON to apply levels directly (no LLM call).
-          If the LLM call fails (no API key, network error), returns sections for the agent to decide.
-        """
+        """Delete a document version and ALL its children (pages, elements, sections, chunks, TOC entries)."""
         try:
-            use_model = model or extraction_model
             doc = await get_document(neo4j_driver, database, document_id)
             if not doc:
                 raise ToolError(f"Document not found: {document_id}")
 
-            doc_name = doc.get("name", document_id)
-
-            parsed_hierarchy = None
-            if hierarchy:
-                try:
-                    parsed_hierarchy = json.loads(hierarchy)
-                except json.JSONDecodeError as e:
-                    raise ToolError(f"Invalid hierarchy JSON: {e}")
-
-            result = await _assign_hierarchy(
-                neo4j_driver, database, document_id, doc_name,
-                model=use_model, hierarchy=parsed_hierarchy,
+            counts = await delete_document_cascade(
+                neo4j_driver, database, document_id
             )
 
-            if "error" in result:
-                raise ToolError(result["error"])
-
-            return json.dumps(result, indent=2, default=str)
-
+            return json.dumps(
+                {
+                    "status": "success",
+                    "document_id": document_id,
+                    "deleted": counts,
+                    "message": f"Deleted document {document_id} and all children.",
+                },
+                indent=2,
+            )
         except ToolError:
             raise
         except Exception as e:
-            logger.error("assign_section_hierarchy failed", error=str(e))
-            raise ToolError(f"Failed: {e}")
-
-    # ===========================================================
-    # POST-PROCESSING: Generate Chunk Descriptions (VLM)
-    # ===========================================================
-
-    @mcp.tool(
-        name="generate_chunk_descriptions",
-        annotations=ToolAnnotations(
-            title="Generate Chunk Descriptions",
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=True,
-            openWorldHint=True,
-        ),
-    )
-    async def generate_chunk_descriptions_tool(
-        document_id: str = Field(..., description="Document version id to process"),
-        model: Optional[str] = Field(
-            None,
-            description="VLM model for description generation (defaults to EXTRACTION_MODEL env var, must support vision)",
-        ),
-        parallel: int = Field(
-            5, description="Max concurrent VLM calls"
-        ),
-    ) -> str:
-        """Generate text descriptions for image/table chunks using a Vision Language Model.
-
-        Works with both docling and pymupdf parse modes:
-        - Docling: image/table chunks have imageBase64 directly
-        - PyMuPDF: chunks link to Image/Table nodes via HAS_ELEMENT
-
-        After running:
-        - Chunk.textDescription stores the VLM description
-        - Chunk.text is NOT modified (stays as original extracted content)
-        - (PyMuPDF mode) Image/Table nodes receive the :Chunk label, documentName, active
-        - (Page-image mode) Page nodes receive the :Chunk label
-        """
-        try:
-            use_model = model or extraction_model
-            doc = await get_document(neo4j_driver, database, document_id)
-            if not doc:
-                raise ToolError(f"Document not found: {document_id}")
-
-            result = await _generate_descriptions(
-                neo4j_driver, database, document_id, model=use_model, parallel=parallel
-            )
-
-            if "error" in result:
-                raise ToolError(result["error"])
-
-            return json.dumps(result, indent=2, default=str)
-
-        except ToolError:
-            raise
-        except Exception as e:
-            logger.error("generate_chunk_descriptions failed", error=str(e))
+            logger.error("delete_document failed", error=str(e))
             raise ToolError(f"Failed: {e}")
 
     return mcp
@@ -1474,57 +1752,74 @@ async def _run_job(
     document_id: Optional[str],
     parse_kwargs: dict[str, Any],
     extraction_model: str = "gpt-5-mini",
+    max_parallel: int = 1,
 ) -> None:
-    """Background task that orchestrates parse-one-write-one processing.
+    """Background task that orchestrates parallel-parse, sequential-write processing.
 
-    For each PDF:
-      1. Submit parsing to subprocess (with tentative version=1)
-      2. After parsing, determine real version atomically (right before write)
-      3. Remap IDs if version changed
-      4. Write result to Neo4j (with retry on constraint violation)
+    Files are parsed in batches of max_parallel concurrently (using the process pool),
+    then each result is written to Neo4j sequentially (keeps version handling atomic).
+    vlm_blocks always runs sequentially (async parser, cannot run in subprocess).
+
+    For each file:
+      1. Submit parsing to subprocess (tentative version=1)
+      2. After all batch parses complete, write each result sequentially
+      3. Determine real version atomically (right before write)
+      4. Remap IDs if version changed, write to Neo4j with retry
       5. Update job progress
     """
-    from .worker import parse_single_pdf
+    from .worker import parse_single_pdf  # noqa: F401 — ensures pickle works in pool
 
     loop = asyncio.get_running_loop()
     progress_queue: multiprocessing.Queue = multiprocessing.Queue()
-
-    await ensure_constraints(neo4j_driver, database)
+    worker_kwargs = {
+        k: v for k, v in parse_kwargs.items()
+        if k not in ("max_vlm_parallel", "vlm_prompt", "text_preview_length")
+    }
 
     try:
-        for file_idx, (pdf_path, page_count) in enumerate(file_page_counts):
-            # Check cancellation
+        # Process files in batches of max_parallel
+        for batch_start in range(0, len(file_page_counts), max_parallel):
+            batch = file_page_counts[batch_start:batch_start + max_parallel]
+
+            # Check cancellation before each batch
             job = job_manager.get_job(job_id)
             if not job or job.status == JobStatus.CANCELLED:
                 logger.info("Job cancelled, stopping", job_id=job_id)
                 return
 
-            pdf_name = Path(pdf_path).name
-            source_id = document_id if (not is_folder and document_id) else Path(pdf_path).stem
-
-            # Update progress: starting this file
-            job_manager.update_progress(
-                job_id,
-                current_file=pdf_name,
-                current_file_pages=page_count,
-                current_stage="parsing",
-            )
             job_manager.update_status(job_id, JobStatus.PARSING)
+            batch_size = len(batch)
 
-            try:
-                # Parse with tentative version=1 (real version determined at write time)
-                tentative_version = 1
+            # --- PARSE PHASE: submit all files in batch concurrently ---
+            batch_infos: list[tuple[str, int, str]] = []  # (pdf_path, page_count, source_id)
+            parse_futures: list[Any] = []
+
+            for pdf_path, page_count in batch:
+                pdf_name = Path(pdf_path).name
+                source_id = document_id if (not is_folder and document_id) else Path(pdf_path).stem
+                batch_infos.append((pdf_path, page_count, source_id))
+
+                current_file_label = (
+                    pdf_name if batch_size == 1
+                    else f"{batch_size} files in parallel"
+                )
+                job_manager.update_progress(
+                    job_id,
+                    current_file=current_file_label,
+                    current_file_pages=page_count,
+                    current_stage="parsing",
+                )
 
                 logger.info(
                     "Submitting for parsing",
                     job_id=job_id,
                     file=pdf_name,
                     mode=parse_mode,
-                    tentative_version=tentative_version,
+                    batch_size=batch_size,
                 )
 
                 if parse_mode == "vlm_blocks":
-                    # VLM blocks mode: async parser, runs in the event loop directly
+                    # VLM blocks: async parser, runs in the event loop (not subprocess)
                     from .parsers.vlm_blocks import VLMBlocksParser
 
                     vlm_parser = VLMBlocksParser(
@@ -1534,7 +1829,7 @@ async def _run_job(
                     parsed_doc = await vlm_parser.parse_async(
                         pdf_path=pdf_path,
                         source_id=source_id,
-                        version=tentative_version,
+                        version=1,
                         metadata=parse_kwargs.get("metadata"),
                         dpi=parse_kwargs.get("dpi", 150),
                         store_page_images=parse_kwargs.get("store_page_images", False),
@@ -1543,127 +1838,145 @@ async def _run_job(
                         extract_sections=parse_kwargs.get("extract_sections", True),
                         text_preview_length=parse_kwargs.get("text_preview_length", 200),
                     )
-                    # Wrap as worker_result for version remapping compatibility
-                    worker_result = {
-                        "parse_mode": "vlm_blocks",
-                        "parsed_doc": parsed_doc.model_dump(),
-                    }
+                    # Wrap as a resolved future so the gather below works uniformly
+                    fut: asyncio.Future[Any] = loop.create_future()
+                    fut.set_result({"parse_mode": "vlm_blocks", "parsed_doc": parsed_doc.model_dump()})
+                    parse_futures.append(fut)
                 else:
-                    # Filter out VLM-only keys that parse_single_pdf doesn't accept
-                    worker_kwargs = {
-                        k: v for k, v in parse_kwargs.items()
-                        if k not in ("max_vlm_parallel", "vlm_prompt", "text_preview_length")
-                    }
-                    try:
-                        worker_result = await loop.run_in_executor(
+                    parse_futures.append(
+                        loop.run_in_executor(
                             process_pool,
                             _make_worker_call(
                                 pdf_path=pdf_path,
                                 source_id=source_id,
-                                version=tentative_version,
+                                version=1,  # tentative; remapped at write time
                                 parse_mode=parse_mode,
                                 progress_queue=progress_queue,
                                 **worker_kwargs,
                             ),
                         )
-                    except BrokenProcessPool:
-                        logger.error("Process pool crashed, recreating", job_id=job_id)
+                    )
+
+            # Wait for all parse tasks in this batch (exceptions are returned, not raised)
+            batch_results = await asyncio.gather(*parse_futures, return_exceptions=True)
+
+            # --- WRITE PHASE: write each result sequentially ---
+            job_manager.update_status(job_id, JobStatus.WRITING)
+
+            for (pdf_path, page_count, source_id), worker_result in zip(batch_infos, batch_results):
+                pdf_name = Path(pdf_path).name
+
+                # Handle parse-phase errors
+                if isinstance(worker_result, BaseException):
+                    if isinstance(worker_result, BrokenProcessPool):
                         raise RuntimeError(
                             f"Subprocess crashed while parsing {pdf_name}. "
                             "This may be due to memory or a docling bug."
                         )
-
-                # Update: writing phase -- determine real version NOW
-                job_manager.update_progress(job_id, current_stage="writing")
-                job_manager.update_status(job_id, JobStatus.WRITING)
-
-                # Atomically determine real version (right before write)
-                existing = await get_existing_versions(neo4j_driver, database, source_id)
-                real_version = 1
-                if existing:
-                    real_version = max(v["version"] for v in existing) + 1
-                    await deactivate_versions(neo4j_driver, database, source_id)
-
-                # Remap IDs if version differs from tentative
-                if real_version != tentative_version:
-                    logger.info(
-                        "Version remapped",
+                    logger.error(
+                        f"Failed to parse {pdf_name}",
                         job_id=job_id,
-                        file=pdf_name,
-                        tentative=tentative_version,
-                        real=real_version,
+                        error=str(worker_result),
                     )
-                    worker_result = _remap_version_in_result(
-                        worker_result, source_id, tentative_version, real_version
+                    job_manager.update_progress(
+                        job_id,
+                        files_failed=job_manager.get_job(job_id).files_failed + 1,
                     )
+                    job_manager.get_job(job_id).errors.append({
+                        "filename": pdf_name,
+                        "error": str(worker_result),
+                    })
+                    if not is_folder:
+                        raise worker_result  # type: ignore[misc]
+                    continue
 
-                version = real_version
+                job_manager.update_progress(job_id, current_stage="writing")
 
-                # Write to Neo4j with retry on constraint violation
-                max_retries = 2
-                for attempt in range(max_retries + 1):
-                    try:
-                        doc_summary = await _write_worker_result_to_neo4j(
-                            neo4j_driver, database, worker_result, source_id, version
+                try:
+                    # Atomically determine real version (right before write)
+                    existing = await get_existing_versions(neo4j_driver, database, source_id)
+                    real_version = 1
+                    if existing:
+                        real_version = max(v["version"] for v in existing) + 1
+                        await deactivate_versions(neo4j_driver, database, source_id)
+
+                    if real_version != 1:
+                        logger.info(
+                            "Version remapped",
+                            job_id=job_id,
+                            file=pdf_name,
+                            tentative=1,
+                            real=real_version,
                         )
-                        break
-                    except Exception as write_err:
-                        err_str = str(write_err)
-                        if "ConstraintValidationFailed" in err_str and attempt < max_retries:
-                            # Another job created this version concurrently -- bump and retry
-                            version += 1
-                            logger.warning(
-                                "Constraint conflict, retrying with higher version",
-                                job_id=job_id,
-                                file=pdf_name,
-                                new_version=version,
-                                attempt=attempt + 1,
+                        worker_result = _remap_version_in_result(
+                            worker_result, source_id, 1, real_version
+                        )
+
+                    version = real_version
+
+                    # Write to Neo4j with retry on constraint violation
+                    max_retries = 2
+                    for attempt in range(max_retries + 1):
+                        try:
+                            doc_summary = await _write_worker_result_to_neo4j(
+                                neo4j_driver, database, worker_result, source_id, version
                             )
-                            worker_result = _remap_version_in_result(
-                                worker_result, source_id, version - 1, version
-                            )
-                        else:
-                            raise
+                            break
+                        except Exception as write_err:
+                            err_str = str(write_err)
+                            if "ConstraintValidationFailed" in err_str and attempt < max_retries:
+                                version += 1
+                                logger.warning(
+                                    "Constraint conflict, retrying with higher version",
+                                    job_id=job_id,
+                                    file=pdf_name,
+                                    new_version=version,
+                                    attempt=attempt + 1,
+                                )
+                                worker_result = _remap_version_in_result(
+                                    worker_result, source_id, version - 1, version
+                                )
+                            else:
+                                raise
 
-                # Record successful document
-                job_manager.update_progress(
-                    job_id,
-                    files_completed=job_manager.get_job(job_id).files_completed + 1,
-                    total_pages_processed=(
-                        job_manager.get_job(job_id).total_pages_processed + page_count
-                    ),
-                    total_elements_extracted=(
-                        job_manager.get_job(job_id).total_elements_extracted
-                        + doc_summary.get("elements", 0)
-                    ),
-                )
-                job_manager.get_job(job_id).documents_created.append(doc_summary)
+                    # Record successful document
+                    job_manager.update_progress(
+                        job_id,
+                        files_completed=job_manager.get_job(job_id).files_completed + 1,
+                        total_pages_processed=(
+                            job_manager.get_job(job_id).total_pages_processed + page_count
+                        ),
+                        total_elements_extracted=(
+                            job_manager.get_job(job_id).total_elements_extracted
+                            + doc_summary.get("elements", 0)
+                        ),
+                    )
+                    job_manager.get_job(job_id).documents_created.append(doc_summary)
 
-                logger.info(
-                    "Document written to Neo4j",
-                    job_id=job_id,
-                    document_id=doc_summary.get("document_id"),
-                )
+                    logger.info(
+                        "Document written to Neo4j",
+                        job_id=job_id,
+                        document_id=doc_summary.get("document_id"),
+                    )
 
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.error(
-                    f"Failed to process {pdf_name}",
-                    job_id=job_id,
-                    error=str(e),
-                )
-                job_manager.update_progress(
-                    job_id,
-                    files_failed=job_manager.get_job(job_id).files_failed + 1,
-                )
-                job_manager.get_job(job_id).errors.append({
-                    "filename": pdf_name,
-                    "error": str(e),
-                })
-                # Continue with next file (don't stop the batch)
-                if not is_folder:
+                except asyncio.CancelledError:
                     raise
+                except Exception as e:
+                    logger.error(
+                        f"Failed to process {pdf_name}",
+                        job_id=job_id,
+                        error=str(e),
+                    )
+                    job_manager.update_progress(
+                        job_id,
+                        files_failed=job_manager.get_job(job_id).files_failed + 1,
+                    )
+                    job_manager.get_job(job_id).errors.append({
+                        "filename": pdf_name,
+                        "error": str(e),
+                    })
+                    if not is_folder:
+                        raise
 
         # All files done -- write manifest for folders
         job = job_manager.get_job(job_id)
@@ -2264,9 +2577,10 @@ async def main(
 
     # Create shared components for background processing
     job_mgr = JobManager()
-    process_pool = ProcessPoolExecutor(max_workers=2)
+    auto_workers = _suggest_max_workers()
+    process_pool = ProcessPoolExecutor(max_workers=auto_workers)
 
-    logger.info("Process pool and job manager initialized", max_workers=2)
+    logger.info("Process pool and job manager initialized", max_workers=auto_workers)
 
     mcp_server = create_mcp_server(
         neo4j_driver=neo4j_driver,

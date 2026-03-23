@@ -177,6 +177,7 @@ class ClassifiedChunk(BaseModel):
 
 class PassType(str, Enum):
     FULL = "full"
+    # Not yet implemented — will raise ToolError if used:
     ENTITIES_ONLY = "entities_only"
     RELATIONSHIPS_ONLY = "relationships_only"
     CORRECTIVE = "corrective"

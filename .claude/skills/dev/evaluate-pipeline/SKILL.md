@@ -1,9 +1,6 @@
----
-name: evaluate-pipeline
-description: > **Internal use only.** Run this after completing a `/build-pdf-chatbot` or `/develop-neo4j-graph` run to evaluate how well the skill and MCP tools performed. Produces a structured report to guide improvement of skills and server tools.
----
-
 # Evaluate Pipeline — Template Development Tool
+
+> **Internal use only.** Run this after completing a `/develop-neo4j-graph` run to evaluate how well the skill and MCP tools performed. Produces a structured report to guide improvement of skills and server tools.
 
 ---
 
@@ -43,14 +40,13 @@ Compare the actual tool sequence against the expected sequence for the parse mod
 ```
 create_lexical_graph          # always first
   └── check_processing_status # poll until complete
+[chunk_lexical_graph]         # required for docling, vlm_blocks, page_image modes
 list_documents                # confirm all docs ingested, get IDs
-[verify_lexical_graph]        # optional: single doc spot-check only
+[verify_lexical_graph]        # optional: single doc spot-check only (never for page_image)
 [assign_section_hierarchy]    # optional: structured docs, not slides/page_image
-[generate_chunk_descriptions] # optional: adds LLM summaries to chunks
-embed_chunks
+[generate_chunk_descriptions] # required for page_image; optional for others
   └── check_processing_status # poll until complete
-[set_active_version]          # only if re-ingesting / versioning
-[clean_inactive]              # only if re-ingesting / versioning
+embed_chunks                  # synchronous — no status poll needed after
 ```
 
 For each tool in the expected sequence, assess:
@@ -59,14 +55,15 @@ For each tool in the expected sequence, assess:
 |------|---------|---------------|-----------------|-------|
 | `create_lexical_graph` | | | | |
 | `check_processing_status` (after create) | | | | |
+| `chunk_lexical_graph` | | | | |
 | `list_documents` | | | | |
 | `verify_lexical_graph` | | | | |
+| `generate_chunk_descriptions` | | | | |
 | `embed_chunks` | | | | |
-| `check_processing_status` (after embed) | | | | |
 
 Flag:
-- Tools called when they shouldn't have been (e.g., `verify_lexical_graph` on every doc)
-- Tools that should have been called but weren't
+- Tools called when they shouldn't have been (e.g., `verify_lexical_graph` on every doc or for `page_image` mode)
+- Tools that should have been called but weren't (e.g., `chunk_lexical_graph` skipped for `docling` mode)
 - Tools called in the wrong order
 - Parameters that were suboptimal for the doc type / parse mode
 
@@ -79,14 +76,14 @@ For each skill step, assess:
 | Step | Followed correctly? | Issue | Suggested fix |
 |------|--------------------|----|---|
 | 1. Discovery | | | |
-| 2. Use case + questions | | | |
+| 2. Use case + mode selection | | | |
 | 3. Data model | | | |
-| 4. Lexical graph | | | |
+| 4. Ingest (CSV / PDF) | | | |
+| 4.5. Verify ingestion counts | | | |
 | 5. Schema export + validators | | | |
 | 6. Entity extraction | | | |
 | 7. Verify extraction | | | |
-| 8. Q&A | | | |
-| 9. Report | | | |
+| 8. Output (CHATBOT / ANALYTICAL) | | | |
 
 For each issue, categorize:
 - **Ambiguous instruction** — the skill wording led to the wrong behavior
@@ -120,7 +117,7 @@ Issue types:
 
 ---
 
-## Step 5: Q&A Quality Assessment
+## Step 5: Q&A Quality Assessment (CHATBOT mode only)
 
 For each target question answered in Step 8 of the skill:
 
@@ -147,8 +144,8 @@ Structure:
 # Pipeline Evaluation — <Topic> — <Date>
 
 ## Run Summary
-- Skill used: build-pdf-chatbot / develop-neo4j-graph
-- Documents: <count>, <parse mode>
+- Skill used: develop-neo4j-graph (MODE: CHATBOT / ANALYTICAL)
+- Data sources: <CSV files>, <PDF count + parse mode>
 - Models: <embedding model>, <extraction model>
 
 ## Tool Call Timeline
@@ -163,7 +160,7 @@ Structure:
 ## MCP Tool Suggestions
 [table from Step 4]
 
-## Q&A Quality
+## Q&A Quality (CHATBOT mode)
 [table from Step 5]
 
 ## Priority Improvements

@@ -211,6 +211,7 @@ __marimo__/
 .cursor/mcp.json
 .mcp.json
 .claude/settings.local.json
+.claude/skills/skill-creator/
 mcp-neo4j-graphrag/
 
 # Data inputs (user data, not committed)

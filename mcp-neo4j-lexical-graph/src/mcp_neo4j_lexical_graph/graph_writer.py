@@ -24,21 +24,48 @@ logger = structlog.get_logger()
 BATCH_SIZE = 200
 
 
-async def ensure_constraints(driver: AsyncDriver, database: str) -> None:
-    """Create uniqueness constraints (idempotent)."""
+async def ensure_constraints(
+    driver: AsyncDriver,
+    database: str,
+    parse_mode: str,
+    extract_images: bool = False,
+    extract_tables: bool = False,
+) -> None:
+    """Create uniqueness constraints only for node types that will actually be written.
+
+    Avoids phantom labels appearing in the Neo4j browser for node types
+    that don't exist in the graph (e.g. Page constraint in pymupdf mode,
+    Section constraint when no sections are extracted).
+    """
+    # Always needed: every parse mode produces Document, Element, and Chunk nodes
     constraints = [
         "CREATE CONSTRAINT document_id IF NOT EXISTS FOR (d:Document) REQUIRE d.id IS UNIQUE",
-        "CREATE CONSTRAINT page_id IF NOT EXISTS FOR (p:Page) REQUIRE p.id IS UNIQUE",
         "CREATE CONSTRAINT element_id IF NOT EXISTS FOR (e:Element) REQUIRE e.id IS UNIQUE",
-        "CREATE CONSTRAINT image_id IF NOT EXISTS FOR (i:Image) REQUIRE i.id IS UNIQUE",
-        "CREATE CONSTRAINT table_id IF NOT EXISTS FOR (t:Table) REQUIRE t.id IS UNIQUE",
-        "CREATE CONSTRAINT section_id IF NOT EXISTS FOR (s:Section) REQUIRE s.id IS UNIQUE",
         "CREATE CONSTRAINT chunk_id IF NOT EXISTS FOR (c:Chunk) REQUIRE c.id IS UNIQUE",
     ]
+    # Page nodes: only page_image and vlm_blocks modes create them
+    if parse_mode in ("page_image", "vlm_blocks"):
+        constraints.append(
+            "CREATE CONSTRAINT page_id IF NOT EXISTS FOR (p:Page) REQUIRE p.id IS UNIQUE"
+        )
+    # Section nodes: only docling and vlm_blocks modes extract sections
+    if parse_mode in ("docling", "vlm_blocks"):
+        constraints.append(
+            "CREATE CONSTRAINT section_id IF NOT EXISTS FOR (s:Section) REQUIRE s.id IS UNIQUE"
+        )
+    # Image and Table nodes: only when explicitly requested in pymupdf mode
+    if extract_images:
+        constraints.append(
+            "CREATE CONSTRAINT image_id IF NOT EXISTS FOR (i:Image) REQUIRE i.id IS UNIQUE"
+        )
+    if extract_tables:
+        constraints.append(
+            "CREATE CONSTRAINT table_id IF NOT EXISTS FOR (t:Table) REQUIRE t.id IS UNIQUE"
+        )
     async with driver.session(database=database) as session:
         for stmt in constraints:
             await session.run(stmt)
-    logger.debug("Constraints ensured")
+    logger.debug("Constraints ensured", parse_mode=parse_mode, constraints=len(constraints))
 
 
 async def get_existing_versions(
@@ -81,7 +108,13 @@ async def write_parsed_document(
 
     Returns a summary dict with counts.
     """
-    await ensure_constraints(driver, database)
+    await ensure_constraints(
+        driver,
+        database,
+        parse_mode=doc.parse_mode,
+        extract_images=doc.parse_params.get("extract_images", False),
+        extract_tables=doc.parse_params.get("extract_tables", False),
+    )
 
     # --- Document node ---
     doc_props: dict[str, Any] = {

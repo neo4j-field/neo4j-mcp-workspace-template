@@ -531,7 +531,7 @@ def create_mcp_server(
         ),
         pass_type: str = Field(
             default="full",
-            description="Extraction pass type: full, entities_only, relationships_only, corrective",
+            description="Extraction pass type. Only 'full' is currently supported. ('entities_only', 'relationships_only', 'corrective' are planned for a future release.)",
         ),
         pass_number: int = Field(
             default=1,
