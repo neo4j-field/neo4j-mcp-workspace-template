@@ -1,13 +1,13 @@
 [project]
-name = "mcp-neo4j-lexical-graph"
-version = "0.2.0"
-description = "MCP server for creating rich lexical graphs from PDFs in Neo4j. Supports multiple parse modes (pymupdf, docling, page-image), pluggable chunking strategies, document versioning, and structural verification."
+name = "mcp-neo4j-advanced-lexical-graph"
+version = "0.1.0"
+description = "Advanced MCP server for creating rich lexical graphs from complex PDFs in Neo4j. Supports VLM-based layout analysis, hierarchical sections, figures, tables, and section-based RAG chunks."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
-keywords = ["neo4j", "mcp", "pdf", "lexical-graph", "rag", "embeddings", "docling", "vector-search"]
+keywords = ["neo4j", "mcp", "pdf", "lexical-graph", "rag", "embeddings", "litellm", "vector-search", "vlm"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.10",
@@ -20,25 +20,23 @@ dependencies = [
     "neo4j>=5.0.0",
     "litellm>=1.0.0,!=1.82.7,!=1.82.8",
     "pymupdf>=1.24.0",
-    "Pillow>=10.0.0",
     "tiktoken>=0.7.0",
     "pydantic>=2.0.0",
     "structlog>=24.0.0",
-    "python-dotenv>=1.0.0",
-    "psutil>=5.9.0",
-    "docling>=2.70.0",
+    "Pillow>=10.0.0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/neo4j-field/neo4j-mcp-workspace-template"
+Documentation = "https://github.com/neo4j-field/neo4j-mcp-workspace-template#readme"
 Repository = "https://github.com/neo4j-field/neo4j-mcp-workspace-template"
 
 [project.scripts]
-mcp-neo4j-lexical-graph = "mcp_neo4j_lexical_graph:main"
+mcp-neo4j-advanced-lexical-graph = "mcp_neo4j_advanced_lexical_graph:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/mcp_neo4j_lexical_graph"]
+packages = ["src/mcp_neo4j_advanced_lexical_graph"]
