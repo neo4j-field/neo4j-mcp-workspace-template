@@ -26,8 +26,10 @@ dependencies = [
     "structlog>=24.0.0",
     "python-dotenv>=1.0.0",
     "psutil>=5.9.0",
-    "docling>=2.70.0",
 ]
+
+[project.optional-dependencies]
+docling = ["docling>=2.70.0"]
 
 [project.urls]
 Homepage = "https://github.com/neo4j-field/neo4j-mcp-workspace-template"

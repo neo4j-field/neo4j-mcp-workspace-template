@@ -76,6 +76,7 @@ Five MCP servers are configured for this workspace:
 - **Purpose:** Parse PDFs into a searchable graph with chunk nodes and embeddings
 - **Key tools:** `create_lexical_graph`, `embed_chunks` (also creates fulltext index by default), `generate_chunk_descriptions`, `assign_section_hierarchy`, `verify_lexical_graph`, `list_documents`
 - **Parse modes:** `pymupdf` (default), `docling`, `page_image`, `vlm_blocks`
+- **Note:** `docling` parse mode requires the optional docling extra. Install via `uv sync --extra docling --directory mcp-neo4j-lexical-graph` or re-run `./setup.sh` after deleting `INSTALL_DOCLING` from `.env`.
 - **Required env:** none in mcp.json — reads from `.env` via python-dotenv
 - **Source:** local `mcp-neo4j-lexical-graph/` (requires `uv sync`)
 
@@ -141,6 +142,8 @@ One skill covers all use cases:
 | MCP tools not found in session | `.mcp.json` or `.cursor/mcp.json` missing, or IDE not restarted | Run `./setup.sh`, then restart IDE/Claude Code |
 | `uv` command not found | uv not installed | See https://docs.astral.sh/uv/getting-started/installation/ |
 | Entity extraction is slow / appears stuck | Background async processing | Call `check_extraction_status` to check progress |
+| `docling` parse mode fails with `ImportError` | docling optional extra not installed | Run `uv sync --extra docling --directory mcp-neo4j-lexical-graph`, then restart IDE |
+| `neo4j-ingest` fails immediately at startup | `.env` not found or wrong path at server launch | Ensure `.env` exists in workspace root; re-run `./setup.sh` |
 
 ---
 

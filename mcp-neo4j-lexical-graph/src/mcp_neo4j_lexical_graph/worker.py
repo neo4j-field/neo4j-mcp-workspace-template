@@ -431,8 +431,8 @@ def _parse_docling(
         from .parsers.docling_parser import DoclingParser
     except ImportError:
         raise ImportError(
-            "Docling is not installed. Install with: "
-            "pip install 'mcp-neo4j-lexical-graph-v2[docling]'"
+            "Docling is not installed. Re-run setup with docling enabled, or: "
+            "uv sync --extra docling --directory mcp-neo4j-lexical-graph"
         )
 
     parser = DoclingParser()

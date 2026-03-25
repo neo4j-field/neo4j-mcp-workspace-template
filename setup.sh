@@ -147,19 +147,64 @@ fi
 # ─────────────────────────────────────────────────────────────
 # 5. uv sync for each local server
 # ─────────────────────────────────────────────────────────────
+
+# Helper: sync a server directory, with optional extra flags (e.g. --extra docling)
+sync_server() {
+  local server_dir="$1"; shift
+  local abs_dir="$WORKSPACE_DIR/$server_dir"
+  if [ ! -d "$abs_dir" ]; then
+    warn "$server_dir directory not found, skipping"
+    return 0
+  fi
+  info "uv sync → $server_dir"
+  if ! uv sync --directory "$abs_dir" "$@"; then
+    error "Failed to install dependencies for $server_dir"
+    error "Run manually: uv sync --directory $abs_dir"
+    exit 1
+  fi
+  success "$server_dir dependencies ready"
+}
+
+# ─────────────────────────────────────────────────────────────
+# 5a. Optional: docling for advanced PDF parsing
+# ─────────────────────────────────────────────────────────────
+INSTALL_DOCLING="${INSTALL_DOCLING:-}"
+
+if [ -z "$INSTALL_DOCLING" ]; then
+  echo ""
+  echo -e "${BOLD}── Optional: advanced PDF parsing (docling) ──────${RESET}"
+  echo "  Enables the 'docling' parse mode in neo4j-lexical-graph."
+  echo "  Requires ~1-2 GB download (PyTorch + transformer models)."
+  echo ""
+  read -r -p "  Install docling? [y/N]: " input_docling
+  case "$input_docling" in
+    [Yy]|[Yy][Ee][Ss]) INSTALL_DOCLING=true ;;
+    *) INSTALL_DOCLING=false ;;
+  esac
+  echo "" >> "$ENV_FILE"
+  echo "# Optional dependencies" >> "$ENV_FILE"
+  echo "INSTALL_DOCLING=${INSTALL_DOCLING}" >> "$ENV_FILE"
+fi
+
 echo ""
 echo -e "${BOLD}── Installing local MCP server dependencies ──────${RESET}"
 
-for server_dir in mcp-neo4j-ingest mcp-neo4j-lexical-graph mcp-neo4j-entity-graph mcp-neo4j-graphrag; do
-  abs_dir="$WORKSPACE_DIR/$server_dir"
-  if [ -d "$abs_dir" ]; then
-    info "uv sync → $server_dir"
-    uv sync --directory "$abs_dir" --quiet
-    success "$server_dir dependencies ready"
-  else
-    warn "$server_dir directory not found, skipping"
-  fi
-done
+sync_server mcp-neo4j-ingest
+
+info "Verifying neo4j-ingest imports..."
+if ! uv --directory "$WORKSPACE_DIR/mcp-neo4j-ingest" run python -c "import mcp_neo4j_ingest" 2>&1; then
+  error "neo4j-ingest failed import check — check NEO4J credentials in .env"
+  exit 1
+fi
+success "neo4j-ingest import OK"
+
+if [ "$INSTALL_DOCLING" = "true" ]; then
+  sync_server mcp-neo4j-lexical-graph --extra docling
+else
+  sync_server mcp-neo4j-lexical-graph
+fi
+sync_server mcp-neo4j-entity-graph
+sync_server mcp-neo4j-graphrag
 
 # ─────────────────────────────────────────────────────────────
 # 6. Optional: BigQuery via toolbox
