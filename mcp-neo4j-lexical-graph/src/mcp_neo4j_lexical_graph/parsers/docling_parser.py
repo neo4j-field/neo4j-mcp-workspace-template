@@ -83,8 +83,8 @@ class DoclingParser(BaseParser):
             from docling.datamodel.base_models import InputFormat
         except ImportError:
             raise ImportError(
-                "docling is not installed. Install with: "
-                "pip install 'mcp-neo4j-lexical-graph-v2[docling]'"
+                "docling is not installed. Re-run setup with docling enabled, or: "
+                "uv sync --extra docling --directory mcp-neo4j-lexical-graph"
             )
 
         path = Path(pdf_path)
