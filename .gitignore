@@ -196,6 +196,7 @@ cython_debug/
 
 # macOS
 .DS_Store
+**/.DS_Store
 
 # Cursor
 #  Cursor is an AI-powered code editor. `.cursorignore` specifies files/directories to
@@ -212,6 +213,7 @@ __marimo__/
 .mcp.json
 .claude/settings.local.json
 .claude/skills/skill-creator/
+.claude/projects/
 mcp-neo4j-graphrag/
 
 # Data inputs (user data, not committed)
