@@ -1,6 +1,6 @@
 ---
 name: develop-neo4j-graph
-description: Develop Neo4j graphs end-to-end: analyze source data, design data models, ingest CSV and/or PDF data, extract entities, and validate with queries. Use when importing data to Neo4j, designing graph data models, creating knowledge graphs, or building chatbots or analytical applications backed by Neo4j.
+description: "Develop Neo4j graphs end-to-end: analyze source data, design data models, ingest CSV and/or PDF data, extract entities, and validate with queries. Use when importing data to Neo4j, designing graph data models, creating knowledge graphs, or building chatbots or analytical applications backed by Neo4j."
 ---
 
 # Develop Neo4j Graph
@@ -41,7 +41,7 @@ Read source data samples to understand content and structure. Do not use MCP too
 
 **CSV data:** Read samples from `data/csv/`. Reference [HANDLE_STRUCTURED_DATA.md](./references/HANDLE_STRUCTURED_DATA.md) for discovery guidance, including the cross-file ID consistency check.
 
-**PDF data:** List files in `data/pdf/` (and subfolders) using Glob. For each PDF, use the Read tool with `pages: "1-2"` to sample content. Reference the Parse Mode Guide in [HANDLE_UNSTRUCTURED_DATA.md](./references/HANDLE_UNSTRUCTURED_DATA.md) to identify the appropriate parse mode for each document type.
+**PDF data:** List files in `data/pdf/` using Shell: `find data/pdf -name "*.pdf" | sort`. (Use Shell rather than file-picker/glob tools — `data/pdf/` is gitignored so those tools may not see PDFs.) For each PDF, use the Read tool with `pages: "1-2"` to sample content; if the Read tool is blocked by gitignore, fall back to Shell: `uv run --with pymupdf python3 -c "import fitz; doc=fitz.open('data/pdf/FILENAME.pdf'); print(doc[0].get_text()[:2000])"`. Reference the Parse Mode Guide in [HANDLE_UNSTRUCTURED_DATA.md](./references/HANDLE_UNSTRUCTURED_DATA.md) to identify the appropriate parse mode for each document type.
 
 Summarize what you found: data types present, content domain, entity types visible, structural observations.
 

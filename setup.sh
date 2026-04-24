@@ -286,6 +286,186 @@ generate_mcp_json() {
 MCPEOF
 }
 
+generate_gemini_settings_json() {
+  local output_file="$1"
+
+  local bigquery_block=""
+  if [ "$INCLUDE_BIGQUERY" = true ]; then
+    bigquery_block=",
+    \"bigquery\": {
+      \"command\": \"toolbox\",
+      \"args\": [\"--prebuilt\", \"bigquery\", \"--stdio\"],
+      \"env\": {
+        \"BIGQUERY_PROJECT\": \"${BIGQUERY_PROJECT}\"
+      }
+    }"
+  fi
+
+  cat > "$output_file" << GEMINIEOF
+{
+  "mcpServers": {
+    "neo4j-data-modeling": {
+      "command": "uvx",
+      "args": ["mcp-neo4j-data-modeling@0.8.2", "--transport", "stdio"]
+    },
+    "neo4j-ingest": {
+      "command": "uv",
+      "args": ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-ingest", "run", "mcp-neo4j-ingest"]
+    },
+    "neo4j-lexical-graph": {
+      "command": "uv",
+      "args": ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-lexical-graph", "run", "mcp-neo4j-lexical-graph"]
+    },
+    "neo4j-entity-graph": {
+      "command": "uv",
+      "args": ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-entity-graph", "run", "mcp-neo4j-entity-graph"]
+    },
+    "neo4j-graphrag": {
+      "command": "uv",
+      "args": ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-graphrag", "run", "mcp-neo4j-graphrag"]
+    }${bigquery_block}
+  }
+}
+GEMINIEOF
+}
+
+generate_vscode_mcp_json() {
+  local output_file="$1"
+
+  local bigquery_block=""
+  if [ "$INCLUDE_BIGQUERY" = true ]; then
+    bigquery_block=",
+    \"bigquery\": {
+      \"command\": \"toolbox\",
+      \"args\": [\"--prebuilt\", \"bigquery\", \"--stdio\"],
+      \"env\": {
+        \"BIGQUERY_PROJECT\": \"${BIGQUERY_PROJECT}\"
+      }
+    }"
+  fi
+
+  cat > "$output_file" << VSCODEEOF
+{
+  "servers": {
+    "neo4j-data-modeling": {
+      "command": "uvx",
+      "args": ["mcp-neo4j-data-modeling@0.8.2", "--transport", "stdio"]
+    },
+    "neo4j-ingest": {
+      "command": "uv",
+      "args": ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-ingest", "run", "mcp-neo4j-ingest"]
+    },
+    "neo4j-lexical-graph": {
+      "command": "uv",
+      "args": ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-lexical-graph", "run", "mcp-neo4j-lexical-graph"]
+    },
+    "neo4j-entity-graph": {
+      "command": "uv",
+      "args": ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-entity-graph", "run", "mcp-neo4j-entity-graph"]
+    },
+    "neo4j-graphrag": {
+      "command": "uv",
+      "args": ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-graphrag", "run", "mcp-neo4j-graphrag"]
+    }${bigquery_block}
+  }
+}
+VSCODEEOF
+}
+
+generate_opencode_json() {
+  local output_file="$1"
+
+  local bigquery_block=""
+  if [ "$INCLUDE_BIGQUERY" = true ]; then
+    bigquery_block=",
+    \"bigquery\": {
+      \"type\": \"local\",
+      \"command\": [\"toolbox\", \"--prebuilt\", \"bigquery\", \"--stdio\"],
+      \"enabled\": true,
+      \"environment\": {
+        \"BIGQUERY_PROJECT\": \"${BIGQUERY_PROJECT}\"
+      }
+    }"
+  fi
+
+  cat > "$output_file" << OPENCODEEOF
+{
+  "\$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "neo4j-data-modeling": {
+      "type": "local",
+      "command": ["uvx", "mcp-neo4j-data-modeling@0.8.2", "--transport", "stdio"],
+      "enabled": true
+    },
+    "neo4j-ingest": {
+      "type": "local",
+      "command": ["uv", "--directory", "${WORKSPACE_DIR}/mcp-neo4j-ingest", "run", "mcp-neo4j-ingest"],
+      "enabled": true
+    },
+    "neo4j-lexical-graph": {
+      "type": "local",
+      "command": ["uv", "--directory", "${WORKSPACE_DIR}/mcp-neo4j-lexical-graph", "run", "mcp-neo4j-lexical-graph"],
+      "enabled": true
+    },
+    "neo4j-entity-graph": {
+      "type": "local",
+      "command": ["uv", "--directory", "${WORKSPACE_DIR}/mcp-neo4j-entity-graph", "run", "mcp-neo4j-entity-graph"],
+      "enabled": true
+    },
+    "neo4j-graphrag": {
+      "type": "local",
+      "command": ["uv", "--directory", "${WORKSPACE_DIR}/mcp-neo4j-graphrag", "run", "mcp-neo4j-graphrag"],
+      "enabled": true
+    }${bigquery_block}
+  }
+}
+OPENCODEEOF
+}
+
+generate_codex_toml() {
+  local output_file="$1"
+
+  cat > "$output_file" << CODEXEOF
+[mcp_servers.neo4j-data-modeling]
+command = "uvx"
+args = ["mcp-neo4j-data-modeling@0.8.2", "--transport", "stdio"]
+enabled = true
+
+[mcp_servers.neo4j-ingest]
+command = "uv"
+args = ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-ingest", "run", "mcp-neo4j-ingest"]
+enabled = true
+
+[mcp_servers.neo4j-lexical-graph]
+command = "uv"
+args = ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-lexical-graph", "run", "mcp-neo4j-lexical-graph"]
+enabled = true
+
+[mcp_servers.neo4j-entity-graph]
+command = "uv"
+args = ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-entity-graph", "run", "mcp-neo4j-entity-graph"]
+enabled = true
+
+[mcp_servers.neo4j-graphrag]
+command = "uv"
+args = ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-graphrag", "run", "mcp-neo4j-graphrag"]
+enabled = true
+CODEXEOF
+
+  if [ "$INCLUDE_BIGQUERY" = true ]; then
+    cat >> "$output_file" << CODEXBQEOF
+
+[mcp_servers.bigquery]
+command = "toolbox"
+args = ["--prebuilt", "bigquery", "--stdio"]
+enabled = true
+
+[mcp_servers.bigquery.env]
+BIGQUERY_PROJECT = "${BIGQUERY_PROJECT}"
+CODEXBQEOF
+  fi
+}
+
 mkdir -p "$WORKSPACE_DIR/.cursor"
 
 generate_mcp_json "$WORKSPACE_DIR/.cursor/mcp.json"
@@ -293,6 +473,21 @@ success ".cursor/mcp.json written"
 
 generate_mcp_json "$WORKSPACE_DIR/.mcp.json"
 success ".mcp.json written (Claude Code project scope)"
+
+mkdir -p "$WORKSPACE_DIR/.gemini"
+generate_gemini_settings_json "$WORKSPACE_DIR/.gemini/settings.json"
+success ".gemini/settings.json written (Gemini CLI)"
+
+mkdir -p "$WORKSPACE_DIR/.vscode"
+generate_vscode_mcp_json "$WORKSPACE_DIR/.vscode/mcp.json"
+success ".vscode/mcp.json written (GitHub Copilot VS Code)"
+
+generate_opencode_json "$WORKSPACE_DIR/opencode.json"
+success "opencode.json written (OpenCode)"
+
+mkdir -p "$WORKSPACE_DIR/.codex"
+generate_codex_toml "$WORKSPACE_DIR/.codex/config.toml"
+success ".codex/config.toml written (OpenAI Codex CLI)"
 
 # ─────────────────────────────────────────────────────────────
 # Done
@@ -302,9 +497,21 @@ echo -e "${GREEN}${BOLD}══════════════════�
 echo -e "${GREEN}${BOLD}  Setup complete!                               ${RESET}"
 echo -e "${GREEN}${BOLD}════════════════════════════════════════════════${RESET}"
 echo ""
-echo "  Next steps:"
-echo "    • Open this folder in Cursor — MCP servers will load automatically"
-echo "    • Or run: claude  (then /setup-workspace to verify)"
+echo "  MCP configs generated for 6 tools:"
+echo "    • Claude Code    → .mcp.json"
+echo "    • Cursor         → .cursor/mcp.json"
+echo "    • Gemini CLI     → .gemini/settings.json"
+echo "    • Copilot VS Code→ .vscode/mcp.json"
+echo "    • OpenCode       → opencode.json"
+echo "    • Codex CLI      → .codex/config.toml"
 echo ""
-echo "  Re-run this script any time to regenerate mcp.json files."
+echo "  Open the workspace in your AI coding tool:"
+echo "    • Claude Code    : claude  (then /setup-workspace to verify)"
+echo "    • Cursor         : open this folder in Cursor"
+echo "    • Gemini CLI     : gemini"
+echo "    • Copilot VS Code: open this folder in VS Code, use Agent mode"
+echo "    • OpenCode       : opencode"
+echo "    • Codex CLI      : codex"
+echo ""
+echo "  Re-run this script any time to regenerate config files."
 echo ""
