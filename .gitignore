@@ -211,6 +211,10 @@ marimo/_lsp/
 __marimo__/
 .cursor/mcp.json
 .mcp.json
+.gemini/settings.json
+.vscode/mcp.json
+opencode.json
+.codex/config.toml
 .claude/settings.local.json
 .claude/skills/skill-creator/
 .claude/projects/
