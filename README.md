@@ -36,14 +36,64 @@ Then open your AI coding tool:
 
 ---
 
+## Claude Desktop
+
+If you use **Claude Desktop** (not one of the 6 coding tools above), install the workspace as a Desktop Extension — no git clone needed.
+
+### Prerequisites
+
+1. **[uv](https://docs.astral.sh/uv/)** — must be installed before the extension can start (see [Installing uv](#installing-uv) below)
+2. **A running Neo4j instance** — [AuraDB free tier](https://neo4j.com/cloud/platform/aura-graph-database/) or [Neo4j Desktop](https://neo4j.com/download/)
+3. **An OpenAI API key** — for embeddings and entity extraction
+
+### Install
+
+1. Download `neo4j-workspace.dxt` from the [latest release](https://github.com/neo4j-field/neo4j-mcp-workspace-template/releases)
+2. Double-click the `.dxt` file — Claude Desktop opens an install dialog
+3. Fill in your Neo4j connection details and API key
+4. Click **Install** — all 5 MCP servers start automatically
+
+### Providing files to the workspace
+
+The MCP servers run on your local machine and access your local filesystem. When Claude asks you for a PDF or CSV file, provide the **full path on your computer** (e.g. `/Users/alice/Documents/report.pdf` on Mac, `C:\Users\alice\Documents\report.pdf` on Windows).
+
+> Do not use the Claude Desktop file upload button to pass files to the workspace — uploaded files go to a sandbox the MCP servers cannot reach. Save the file to your disk and give Claude the path instead.
+
+---
+
 ## Requirements
 
-- **Python 3.10+**
-- **[uv](https://docs.astral.sh/uv/getting-started/installation/)** — fast Python package manager
+- **[uv](https://docs.astral.sh/uv/)** — required to run all MCP servers (provides `uvx`)
 - **Neo4j 2025.01+** — required for native `VECTOR` type used by lexical-graph
   - [Neo4j Desktop](https://neo4j.com/download/) or [AuraDB](https://neo4j.com/cloud/platform/aura-graph-database/)
 - **LLM provider** — for embedding generation and entity extraction (see [LLM Configuration](#llm-configuration) below)
 - **Google MCP Toolbox** (optional) — only if using BigQuery as a data source
+
+### Installing uv
+
+`uv` is a fast Python package manager that also provides `uvx` — used to run the MCP servers without a manual Python setup. Install it once on your machine:
+
+**macOS / Linux**
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+Then restart your terminal (or run `source $HOME/.local/bin/env`).
+
+**Windows (PowerShell)**
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+Then restart your terminal.
+
+**Verify the install**
+```bash
+uv --version   # should print e.g. uv 0.6.x
+uvx --version  # same binary, should also work
+```
+
+> **Note for Claude Desktop users:** `uv` must be installed and on your PATH before the Neo4j workspace extension can start. Claude Desktop does not bundle `uv`.
+
+Full docs: [docs.astral.sh/uv/getting-started/installation](https://docs.astral.sh/uv/getting-started/installation/)
 
 ---
 
