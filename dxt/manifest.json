@@ -1,0 +1,76 @@
+{
+  "dxt_version": "0.1",
+  "name": "neo4j-workspace",
+  "display_name": "Neo4j Graph Workspace",
+  "version": "0.1.0",
+  "description": "Build and query Neo4j knowledge graphs from CSV and PDF data",
+  "author": {
+    "name": "Neo4j"
+  },
+  "server": {
+    "type": "python",
+    "entry_point": "server.py",
+    "mcp_config": {
+      "command": "uvx",
+      "args": ["mcp-neo4j-proxy@0.1.0"],
+      "env": {
+        "NEO4J_URI": "${user_config.neo4j_uri}",
+        "NEO4J_USERNAME": "${user_config.neo4j_username}",
+        "NEO4J_PASSWORD": "${user_config.neo4j_password}",
+        "NEO4J_DATABASE": "${user_config.neo4j_database}",
+        "OPENAI_API_KEY": "${user_config.openai_api_key}",
+        "EMBEDDING_MODEL": "${user_config.embedding_model}",
+        "EXTRACTION_MODEL": "${user_config.extraction_model}"
+      }
+    }
+  },
+  "user_config": {
+    "neo4j_uri": {
+      "type": "string",
+      "title": "Neo4j URI",
+      "description": "e.g. neo4j://localhost:7687 or neo4j+s://xxxx.databases.neo4j.io",
+      "required": true,
+      "default": "neo4j://localhost:7687"
+    },
+    "neo4j_username": {
+      "type": "string",
+      "title": "Neo4j Username",
+      "description": "Neo4j database username",
+      "required": true,
+      "default": "neo4j"
+    },
+    "neo4j_password": {
+      "type": "string",
+      "title": "Neo4j Password",
+      "description": "Neo4j database password",
+      "required": true,
+      "sensitive": true
+    },
+    "neo4j_database": {
+      "type": "string",
+      "title": "Neo4j Database",
+      "description": "Neo4j database name",
+      "required": true,
+      "default": "neo4j"
+    },
+    "openai_api_key": {
+      "type": "string",
+      "title": "OpenAI API Key",
+      "description": "Required for embeddings and entity extraction",
+      "required": true,
+      "sensitive": true
+    },
+    "embedding_model": {
+      "type": "string",
+      "title": "Embedding Model",
+      "description": "OpenAI embedding model name",
+      "default": "text-embedding-3-small"
+    },
+    "extraction_model": {
+      "type": "string",
+      "title": "Extraction Model (LiteLLM format)",
+      "description": "e.g. openai/gpt-4o-mini, anthropic/claude-3-haiku-20240307",
+      "default": "openai/gpt-4o-mini"
+    }
+  }
+}
