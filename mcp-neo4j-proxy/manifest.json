@@ -1,5 +1,5 @@
 {
-  "manifest_version": "0.3",
+  "dxt_version": "0.1",
   "name": "neo4j-workspace",
   "display_name": "Neo4j Graph Workspace",
   "version": "0.1.0",
@@ -35,18 +35,21 @@
     "neo4j_username": {
       "type": "string",
       "title": "Neo4j Username",
+      "description": "Neo4j database username",
       "required": true,
       "default": "neo4j"
     },
     "neo4j_password": {
       "type": "string",
       "title": "Neo4j Password",
+      "description": "Neo4j database password",
       "required": true,
       "sensitive": true
     },
     "neo4j_database": {
       "type": "string",
       "title": "Neo4j Database",
+      "description": "Neo4j database name",
       "required": true,
       "default": "neo4j"
     },
@@ -60,6 +63,7 @@
     "embedding_model": {
       "type": "string",
       "title": "Embedding Model",
+      "description": "OpenAI embedding model name",
       "default": "text-embedding-3-small"
     },
     "extraction_model": {
