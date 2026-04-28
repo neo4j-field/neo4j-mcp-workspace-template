@@ -90,6 +90,10 @@ Always use absolute paths. Use `ingest_csv_into_neo4j`.
 
 ### PDF data — `neo4j-lexical-graph`
 
+> **IMPORTANT — file paths:** All path parameters must point to files on the **user's local filesystem**.
+> Never pass paths from upload sandboxes (`/mnt/user-data/uploads/`, `/tmp/`, `/home/claude/`, etc.) — the MCP server cannot access those locations.
+> If the user uploaded a file rather than providing a path, ask: *"What is the full local path to this file on your machine?"* before calling any tool.
+
 Load the mode-specific reference file for the exact tool sequence:
 - **pymupdf** → [PYMUPDF_MODE.md](./references/PYMUPDF_MODE.md)
 - **docling** → [DOCLING_MODE.md](./references/DOCLING_MODE.md)
