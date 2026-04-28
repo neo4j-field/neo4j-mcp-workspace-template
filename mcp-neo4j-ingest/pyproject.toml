@@ -15,11 +15,6 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-
-[project.urls]
-Homepage = "https://github.com/neo4j-field/neo4j-mcp-workspace-template"
-Repository = "https://github.com/neo4j-field/neo4j-mcp-workspace-template"
-
 dependencies = [
     "fastmcp>=2.13.1",
     "mcp-neo4j-cypher>=0.5.3",
@@ -27,6 +22,10 @@ dependencies = [
     "pandas>=2.3.3",
     "python-dotenv>=1.2.1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/neo4j-field/neo4j-mcp-workspace-template"
+Repository = "https://github.com/neo4j-field/neo4j-mcp-workspace-template"
 
 [project.scripts]
 mcp-neo4j-ingest = "mcp_neo4j_ingest:main"
