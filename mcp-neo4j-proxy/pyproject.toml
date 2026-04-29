@@ -1,6 +1,6 @@
 [project]
 name = "mcp-neo4j-proxy"
-version = "0.1.0"
+version = "0.2.0"
 description = "Unified Neo4j MCP proxy — single entry point for all workspace servers"
 requires-python = ">=3.10"
 dependencies = [

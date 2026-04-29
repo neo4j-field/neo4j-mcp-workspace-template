@@ -73,12 +73,20 @@ Five MCP servers are configured for this workspace:
 
 ### `neo4j-entity-graph`
 - **Purpose:** Extract structured entities from lexical graph chunks using LLM
-- **Key tools:** `extract_entities`, `check_extraction_status`, `cancel_extraction`
 - **Required env:** reads from `.env` via python-dotenv
 
+Two extraction paths — choose one per project:
+
+| Path | When to use | Key tools |
+|------|-------------|-----------|
+| **File-based** | Quick schema from a data model JSON | `convert_schema` → `extract_entities(schema=...)` |
+| **Ontology DB** | Graph-driven; supports normalizers, aliases, blocklists, editable in Bloom | `setup_ontology_db`, write ontology via Cypher, `generate_schema_from_ontology` → `extract_entities(ontology_name=...)` |
+
+Additional tools: `check_extraction_status`, `cancel_extraction`
+
 ### `neo4j-graphrag`
-- **Purpose:** Query the graph using vector search, fulltext search, and Cypher
-- **Key tools:** `get_neo4j_schema_and_indexes`, `vector_search`, `fulltext_search`, `read_neo4j_cypher`
+- **Purpose:** Query and write the graph using vector search, fulltext search, and Cypher
+- **Key tools:** `get_neo4j_schema_and_indexes`, `vector_search`, `fulltext_search`, `read_neo4j_cypher`, `write_neo4j_cypher`, `search_cypher_query`, `read_node_image`
 - **Required env:** reads from `.env` via python-dotenv
 
 ---
@@ -95,7 +103,7 @@ The full workflow is in `.agents/skills/develop-neo4j-graph/SKILL.md`.
 3. Design graph data model (`neo4j-data-modeling`)
 4. Ingest data — CSV (`neo4j-ingest`) and/or PDF (`neo4j-lexical-graph` + `neo4j-entity-graph`)
 5. Verify ingestion counts (`neo4j-graphrag`)
-6–7. [PDF only] Schema export, entity extraction, verify
+6–7. [PDF only] Schema export, entity extraction, verify — file-based (`convert_schema`) or ontology DB (`generate_schema_from_ontology`)
 8. Output — Q&A report (CHATBOT) or Cypher analysis (ANALYTICAL)
 
 ---

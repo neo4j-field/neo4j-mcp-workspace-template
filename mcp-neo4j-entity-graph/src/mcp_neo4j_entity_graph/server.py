@@ -42,9 +42,12 @@ from .models import (
     ExtractionSchema,
     PassType,
 )
+from .ontology_loader import load_ontology
 from .schema_generator import generate_extraction_models_code
 from .text_extractor import TextExtractor
 from .vlm_extractor import VlmExtractor
+
+from platformdirs import user_cache_dir
 
 structlog.configure(
     processors=[
@@ -64,9 +67,22 @@ logger = structlog.get_logger()
 def create_mcp_server(
     neo4j_driver: AsyncDriver,
     database: str = "neo4j",
+    ontology_database: str = "ontology",
     extraction_model: str = DEFAULT_EXTRACTION_MODEL,
+    ontology_driver: Optional[AsyncDriver] = None,
 ) -> FastMCP:
-    """Create the entity graph MCP server with all tools."""
+    """Create the entity graph MCP server with all tools.
+
+    Args:
+        neo4j_driver: Driver for the Documents DB (chunk reads / entity writes)
+        database: Default Neo4j database for chunk reads / entity writes (Document DB)
+        ontology_database: Neo4j database for ontology reads (Ontology DB)
+        extraction_model: Default LLM model for extraction
+        ontology_driver: Driver for the Ontology DB. Defaults to neo4j_driver when
+            both databases are on the same instance (local / single-instance Aura).
+    """
+    if ontology_driver is None:
+        ontology_driver = neo4j_driver
 
     mcp = FastMCP("mcp-neo4j-entity-graph")
     job_manager = JobManager()
@@ -487,6 +503,132 @@ def create_mcp_server(
             raise ToolError(f"Failed to convert schema: {e}")
 
     # ========================================
+    # TOOL: Setup Ontology DB
+    # ========================================
+
+    @mcp.tool(
+        name="setup_ontology_db",
+        annotations=ToolAnnotations(
+            title="Setup Ontology DB constraints",
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    async def setup_ontology_db() -> str:
+        """Create constraints and indexes on the Ontology DB.
+
+        Idempotent — safe to call multiple times. Run once after the Ontology DB
+        is first created. The Ontology DB schema is documented in
+        `mcp-neo4j-entity-graph/docs/ONTOLOGY_DB_SCHEMA.md`.
+        """
+        statements = [
+            "CREATE CONSTRAINT ontology_name_unique IF NOT EXISTS FOR (o:Ontology) REQUIRE o.name IS UNIQUE",
+            "CREATE CONSTRAINT node_type_name_unique IF NOT EXISTS FOR (nt:NodeType) REQUIRE nt.name IS UNIQUE",
+            "CREATE CONSTRAINT relationship_type_name_unique IF NOT EXISTS FOR (rt:RelationshipType) REQUIRE rt.name IS UNIQUE",
+            "CREATE CONSTRAINT alias_map_name_unique IF NOT EXISTS FOR (am:AliasMap) REQUIRE am.name IS UNIQUE",
+            "CREATE CONSTRAINT blocklist_name_unique IF NOT EXISTS FOR (bl:Blocklist) REQUIRE bl.name IS UNIQUE",
+            "CREATE INDEX property_def_name IF NOT EXISTS FOR (pd:PropertyDef) ON (pd.name)",
+        ]
+        try:
+            async with ontology_driver.session(database=ontology_database) as session:
+                for stmt in statements:
+                    await session.run(stmt)
+            logger.info("Ontology DB setup complete", database=ontology_database)
+            return json.dumps(
+                {
+                    "status": "success",
+                    "database": ontology_database,
+                    "constraints_created": len(statements),
+                    "message": (
+                        f"Ontology DB '{ontology_database}' is ready. "
+                        f"Create your ontology by writing :Ontology, :NodeType, :PropertyDef, "
+                        f":RelationshipType, :AliasMap, :Blocklist nodes."
+                    ),
+                },
+                indent=2,
+            )
+        except Exception as e:
+            logger.error("Failed to setup ontology DB", error=str(e))
+            raise ToolError(f"Failed to setup ontology DB: {e}")
+
+    # ========================================
+    # TOOL: Generate Schema from Ontology
+    # ========================================
+
+    @mcp.tool(
+        name="generate_schema_from_ontology",
+        annotations=ToolAnnotations(
+            title="Generate Pydantic schema from Ontology DB",
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    async def generate_schema_from_ontology(
+        ontology_name: str = Field(
+            ...,
+            description="Name of the :Ontology node in the Ontology DB to compile.",
+        ),
+    ) -> str:
+        """Read an ontology from the Ontology DB and compile it to a Pydantic schema.
+
+        The compiled schema is cached in a platform-appropriate user cache dir,
+        keyed by `ontology_name` (overwritten on each call). Use this cache path
+        as the `schema` argument to `extract_entities`, OR pass `ontology_name`
+        directly to `extract_entities` to regenerate-then-extract in one step.
+
+        The Ontology DB graph schema is documented in
+        `mcp-neo4j-entity-graph/docs/ONTOLOGY_DB_SCHEMA.md`.
+        """
+        try:
+            schema, normalizers = await load_ontology(
+                ontology_driver, ontology_database, ontology_name
+            )
+        except ValueError as e:
+            raise ToolError(str(e))
+        except Exception as e:
+            logger.error("Failed to load ontology", error=str(e))
+            raise ToolError(f"Failed to load ontology '{ontology_name}': {e}")
+
+        try:
+            code = generate_extraction_models_code(schema, normalizers)
+        except Exception as e:
+            logger.error("Failed to generate Pydantic code", error=str(e))
+            raise ToolError(f"Failed to generate Pydantic code: {e}")
+
+        cache_root = pathlib.Path(user_cache_dir("mcp-neo4j-entity-graph")) / "schemas"
+        cache_root.mkdir(parents=True, exist_ok=True)
+        cache_path = cache_root / f"{ontology_name}.py"
+        cache_path.write_text(code)
+
+        logger.info(
+            "Pydantic schema generated from ontology",
+            ontology=ontology_name,
+            path=str(cache_path),
+            entities=len(schema.entity_types),
+            relationships=len(schema.relationship_types),
+        )
+
+        return json.dumps(
+            {
+                "status": "success",
+                "ontology_name": ontology_name,
+                "cache_path": str(cache_path),
+                "entity_types": len(schema.entity_types),
+                "relationship_types": len(schema.relationship_types),
+                "schema_content": code,
+                "message": (
+                    f"Compiled '{ontology_name}' to {cache_path}. "
+                    f"Pass ontology_name='{ontology_name}' to extract_entities to use it."
+                ),
+            },
+            indent=2,
+        )
+
+    # ========================================
     # TOOL 2: Extract Entities (async)
     # ========================================
 
@@ -501,9 +643,20 @@ def create_mcp_server(
         ),
     )
     async def extract_entities(
-        schema: str = Field(
-            ...,
-            description="Path to the Pydantic .py schema file generated by convert_schema.",
+        schema: Optional[str] = Field(
+            default=None,
+            description=(
+                "Path to a Pydantic .py schema file generated by convert_schema. "
+                "Use this OR ontology_name (exactly one is required)."
+            ),
+        ),
+        ontology_name: Optional[str] = Field(
+            default=None,
+            description=(
+                "Name of an :Ontology in the Ontology DB. When provided, the schema "
+                "is regenerated from the ontology before extraction (always fresh — "
+                "picks up edits made in Bloom). Use this OR schema (exactly one is required)."
+            ),
         ),
         source_label: str = Field(
             default="Chunk",
@@ -561,6 +714,43 @@ def create_mcp_server(
         if pt != PassType.FULL:
             raise ToolError(
                 f"pass_type='{pass_type}' is not yet implemented. Only 'full' is supported in v1."
+            )
+
+        # Resolve schema source: ontology_name (regenerate) or schema (existing path)
+        if ontology_name and schema:
+            raise ToolError(
+                "Provide exactly one of `ontology_name` or `schema`, not both."
+            )
+        if not ontology_name and not schema:
+            raise ToolError(
+                "Provide either `ontology_name` (recommended for the lawyer demo flow) "
+                "or `schema` (path to a .py file from convert_schema)."
+            )
+
+        if ontology_name:
+            try:
+                ontology_schema, ontology_normalizers = await load_ontology(
+                    ontology_driver, ontology_database, ontology_name
+                )
+            except ValueError as e:
+                raise ToolError(str(e))
+            except Exception as e:
+                raise ToolError(f"Failed to load ontology '{ontology_name}': {e}")
+
+            try:
+                code = generate_extraction_models_code(ontology_schema, ontology_normalizers)
+            except Exception as e:
+                raise ToolError(f"Failed to compile ontology '{ontology_name}': {e}")
+
+            cache_root = pathlib.Path(user_cache_dir("mcp-neo4j-entity-graph")) / "schemas"
+            cache_root.mkdir(parents=True, exist_ok=True)
+            cache_path = cache_root / f"{ontology_name}.py"
+            cache_path.write_text(code)
+            schema = str(cache_path)
+            logger.info(
+                "Regenerated schema from ontology before extraction",
+                ontology=ontology_name,
+                cache_path=str(cache_path),
             )
 
         # Load Pydantic schema
@@ -743,6 +933,7 @@ async def main(
     username: Optional[str] = None,
     password: Optional[str] = None,
     database: str = "neo4j",
+    ontology_database: str = "ontology",
     extraction_model: str = DEFAULT_EXTRACTION_MODEL,
     transport: Literal["stdio", "sse"] = "stdio",
     host: str = "127.0.0.1",
@@ -754,28 +945,56 @@ async def main(
     username = username or os.environ.get("NEO4J_USERNAME", "neo4j")
     password = password or os.environ.get("NEO4J_PASSWORD", "password")
     database = os.environ.get("NEO4J_DATABASE", database)
+    ontology_database = os.environ.get("NEO4J_ONTOLOGY_DATABASE", ontology_database)
     extraction_model = os.environ.get("EXTRACTION_MODEL", extraction_model)
+
+    # Separate Aura instance for the Ontology DB — fall back to Documents DB credentials
+    # when NEO4J_ONTOLOGY_URI is unset (single-instance / local setup).
+    ontology_url = os.environ.get("NEO4J_ONTOLOGY_URI", "").strip() or db_url
+    ontology_username = os.environ.get("NEO4J_ONTOLOGY_USERNAME", "").strip() or username
+    ontology_password = os.environ.get("NEO4J_ONTOLOGY_PASSWORD", "").strip() or password
 
     logger.info(
         "Starting MCP Neo4j Entity Graph Server",
         db_url=db_url,
         database=database,
+        ontology_url=ontology_url,
+        ontology_database=ontology_database,
         extraction_model=extraction_model,
     )
 
     neo4j_driver = AsyncGraphDatabase.driver(db_url, auth=(username, password))
 
+    # Create a dedicated ontology driver only when it points at a different instance.
+    if ontology_url != db_url or ontology_username != username:
+        ontology_driver: AsyncDriver = AsyncGraphDatabase.driver(
+            ontology_url, auth=(ontology_username, ontology_password)
+        )
+    else:
+        ontology_driver = neo4j_driver
+
     try:
         async with neo4j_driver.session(database=database) as session:
             await session.run("RETURN 1")
-        logger.info("Neo4j connection verified")
+        logger.info("Neo4j documents DB connection verified")
     except Exception as e:
-        logger.error(f"Failed to connect to Neo4j: {e}")
+        logger.error(f"Failed to connect to documents DB: {e}")
         raise
+
+    if ontology_driver is not neo4j_driver:
+        try:
+            async with ontology_driver.session(database=ontology_database) as session:
+                await session.run("RETURN 1")
+            logger.info("Neo4j ontology DB connection verified")
+        except Exception as e:
+            logger.error(f"Failed to connect to ontology DB: {e}")
+            raise
 
     mcp = create_mcp_server(
         neo4j_driver=neo4j_driver,
+        ontology_driver=ontology_driver,
         database=database,
+        ontology_database=ontology_database,
         extraction_model=extraction_model,
     )
 

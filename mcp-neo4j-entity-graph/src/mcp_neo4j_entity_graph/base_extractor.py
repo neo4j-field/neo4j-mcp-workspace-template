@@ -277,6 +277,9 @@ def parse_extraction_response(
         return ChunkExtractionResult(chunk_id=chunk_id)
 
 
+_SKIP_SENTINEL = "__SKIP__"
+
+
 def _parse_typed_response(
     content: str,
     schema: ExtractionSchema,
@@ -286,11 +289,16 @@ def _parse_typed_response(
     """Parse response using the strongly-typed ExtractionOutput model.
 
     This triggers Pydantic validators (normalization, etc.) on the data.
+
+    Entities and relationships whose key property contains the SKIP sentinel
+    (set by ontology-generated validators when a value should be dropped — e.g.
+    blocklisted terms, enum-validation failures) are filtered out here.
     """
     extraction = output_model.model_validate_json(content)
 
     entities: list[ExtractedEntity] = []
     relationships: list[ExtractedRelationship] = []
+    skip_count = 0
 
     # Iterate over entity fields (identified by _node_label ClassVar)
     for field_name, field_value in extraction:
@@ -304,11 +312,20 @@ def _parse_typed_response(
                 # Entity model: has _node_label
                 if hasattr(item_class, "_node_label"):
                     label = item_class._node_label  # type: ignore[attr-defined]
+                    key_property = getattr(item_class, "_key_property", None)
                     props = {
                         k: v
                         for k, v in item.model_dump().items()
                         if v is not None and not k.startswith("_")
                     }
+                    # Drop entities whose key property is missing or marked SKIP.
+                    key_value = props.get(key_property) if key_property else None
+                    if (
+                        key_property is not None
+                        and (key_value is None or key_value == _SKIP_SENTINEL)
+                    ) or any(v == _SKIP_SENTINEL for v in props.values()):
+                        skip_count += 1
+                        continue
                     if props:
                         entities.append(ExtractedEntity(label=label, properties=props))
 
@@ -338,17 +355,34 @@ def _parse_typed_response(
                         else:
                             rel_props[k] = v
 
-                    if source_key and target_key:
-                        relationships.append(
-                            ExtractedRelationship(
-                                type=rel_type,
-                                source_label=start_label,
-                                source_key=source_key,
-                                target_label=end_label,
-                                target_key=target_key,
-                                properties=rel_props,
-                            )
+                    # Drop relationships where either endpoint key is missing or SKIP.
+                    if (
+                        not source_key
+                        or not target_key
+                        or source_key == _SKIP_SENTINEL
+                        or target_key == _SKIP_SENTINEL
+                    ):
+                        if source_key == _SKIP_SENTINEL or target_key == _SKIP_SENTINEL:
+                            skip_count += 1
+                        continue
+
+                    relationships.append(
+                        ExtractedRelationship(
+                            type=rel_type,
+                            source_label=start_label,
+                            source_key=source_key,
+                            target_label=end_label,
+                            target_key=target_key,
+                            properties=rel_props,
                         )
+                    )
+
+    if skip_count:
+        logger.info(
+            "Filtered SKIP entities/relationships",
+            chunk_id=chunk_id,
+            skipped=skip_count,
+        )
 
     return ChunkExtractionResult(
         chunk_id=chunk_id,

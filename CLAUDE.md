@@ -77,6 +77,7 @@ neo4j-mcp-workspace-template/
 ├── mcp-neo4j-ingest/               # Local: structured CSV ingestion server
 ├── mcp-neo4j-lexical-graph/        # Local: PDF → lexical graph server
 ├── mcp-neo4j-entity-graph/         # Local: entity extraction server
+├── neo4j-mcp-workspace-dxt/        # Claude Desktop DXT extension
 ├── mcp-neo4j-graphrag/             # Local: cloned by setup.sh (gitignored)
 ├── .cursor/
 │   └── mcp.json                    # Generated (gitignored) — Cursor MCP config
@@ -120,17 +121,26 @@ Five MCP servers are configured for this workspace:
 
 ### `neo4j-entity-graph`
 - **Purpose:** Extract structured entities from lexical graph Chunk nodes using LLM
-- **Key tools:** `extract_entities`, `check_extraction_status`, `cancel_extraction`
 - **Provider:** Any LiteLLM-compatible provider (100+ supported)
 - **Processing:** Async background — use status tool to monitor
 - **Required env:** none in mcp.json — reads from `.env` via python-dotenv
 - **Source:** local `mcp-neo4j-entity-graph/` (requires `uv sync`)
 
+Two extraction paths — choose one per project:
+
+| Path | When to use | Key tools |
+|------|-------------|-----------|
+| **File-based** | Developer workflow in Claude Code; quick schema from a data model JSON | `convert_schema` → `extract_entities(schema=...)` |
+| **Ontology DB** | Graph-driven; supports normalizers, aliases, blocklists, editable in Bloom; required for Claude Desktop | `setup_ontology_db`, write ontology via Cypher, `generate_schema_from_ontology` → `extract_entities(ontology_name=...)` |
+
+Additional tools: `check_extraction_status`, `cancel_extraction`
+
 ### `neo4j-graphrag`
-- **Purpose:** Query the graph using vector search, fulltext search, and Cypher — the retrieval layer for RAG applications
-- **Key tools:** `get_neo4j_schema_and_indexes`, `vector_search`, `fulltext_search`, `read_neo4j_cypher`, `search_cypher_query`
+- **Purpose:** Query and write the graph using vector search, fulltext search, and Cypher — the retrieval layer for RAG applications
+- **Key tools:** `get_neo4j_schema_and_indexes`, `vector_search`, `fulltext_search`, `read_neo4j_cypher`, `write_neo4j_cypher`, `search_cypher_query`, `read_node_image`
 - **Required env:** none in mcp.json — reads from `.env` via python-dotenv
 - **Source:** local `mcp-neo4j-graphrag/` (cloned by `setup.sh`, requires `uv sync`)
+- **Note:** When using the Ontology DB path, two instances are active — tools are prefixed `documents_*` (documents DB) and `ontology_*` (ontology DB)
 
 ### `bigquery` (optional)
 - **Purpose:** Query BigQuery as a source database
@@ -152,7 +162,7 @@ One skill covers all use cases:
 | 3 | Design graph data model iteratively | `neo4j-data-modeling` |
 | 4 | Ingest data (CSV and/or PDF) | `neo4j-ingest` / `neo4j-lexical-graph` + `neo4j-entity-graph` |
 | 4.5 | Verify ingestion counts | `neo4j-graphrag` |
-| 5–7 | Schema export, entity extraction, verify [PDF only] | `neo4j-entity-graph` |
+| 5–7 | Schema export, entity extraction, verify [PDF only] — file-based (`convert_schema`) or ontology DB (`generate_schema_from_ontology`) | `neo4j-entity-graph` |
 | 8 | Output — Q&A report (CHATBOT) or Cypher analysis (ANALYTICAL) | `neo4j-graphrag` |
 
 **Structured data (CSV):** Steps 1 → 3 → 4 → 4.5 → 8

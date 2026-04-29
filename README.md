@@ -48,7 +48,7 @@ If you use **Claude Desktop** (not one of the 6 coding tools above), install the
 
 ### Install
 
-1. Download `neo4j-workspace.dxt` from the [latest release](https://github.com/neo4j-field/neo4j-mcp-workspace-template/releases)
+1. Download `neo4j-mcp-workspace.dxt` from the [latest release](https://github.com/neo4j-field/neo4j-mcp-workspace-template/releases)
 2. Double-click the `.dxt` file — Claude Desktop opens an install dialog
 3. Fill in your Neo4j connection details and API key
 4. Click **Install** — all 5 MCP servers start automatically

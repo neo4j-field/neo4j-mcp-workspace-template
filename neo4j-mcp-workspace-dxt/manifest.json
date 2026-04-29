@@ -1,0 +1,117 @@
+{
+  "dxt_version": "0.1",
+  "name": "neo4j-mcp-workspace",
+  "display_name": "Neo4j Graph Workspace",
+  "version": "0.1.0",
+  "description": "Build and query Neo4j knowledge graphs from CSV and PDF data",
+  "author": {
+    "name": "Neo4j"
+  },
+  "server": {
+    "type": "python",
+    "entry_point": "server.py",
+    "mcp_config": {
+      "command": "uvx",
+      "args": ["mcp-neo4j-proxy@0.2.0"],
+      "env": {
+        "NEO4J_URI": "${user_config.neo4j_uri}",
+        "NEO4J_USERNAME": "${user_config.neo4j_username}",
+        "NEO4J_PASSWORD": "${user_config.neo4j_password}",
+        "NEO4J_DATABASE": "${user_config.neo4j_database}",
+        "NEO4J_ONTOLOGY_URI": "${user_config.neo4j_ontology_uri}",
+        "NEO4J_ONTOLOGY_USERNAME": "${user_config.neo4j_ontology_username}",
+        "NEO4J_ONTOLOGY_PASSWORD": "${user_config.neo4j_ontology_password}",
+        "NEO4J_ONTOLOGY_DATABASE": "${user_config.neo4j_ontology_database}",
+        "OPENAI_API_KEY": "${user_config.openai_api_key}",
+        "EMBEDDING_MODEL": "${user_config.embedding_model}",
+        "EXTRACTION_MODEL": "${user_config.extraction_model}",
+        "EXTRA_ENV": "${user_config.extra_env}"
+      }
+    }
+  },
+  "user_config": {
+    "neo4j_uri": {
+      "type": "string",
+      "title": "Documents DB — URI",
+      "description": "e.g. neo4j://localhost:7687 or neo4j+s://xxxx.databases.neo4j.io",
+      "required": true,
+      "default": "neo4j://localhost:7687"
+    },
+    "neo4j_username": {
+      "type": "string",
+      "title": "Documents DB — Username",
+      "description": "Neo4j username for the Documents database",
+      "required": true,
+      "default": "neo4j"
+    },
+    "neo4j_password": {
+      "type": "string",
+      "title": "Documents DB — Password",
+      "description": "Neo4j password for the Documents database",
+      "required": true,
+      "sensitive": true
+    },
+    "neo4j_database": {
+      "type": "string",
+      "title": "Documents DB — Database name",
+      "description": "Database where documents, chunks, and extracted entities live. Aura: always 'neo4j'.",
+      "required": true,
+      "default": "neo4j"
+    },
+    "neo4j_ontology_uri": {
+      "type": "string",
+      "title": "Ontology DB — URI",
+      "description": "URI for the Ontology database. On Aura each database is a separate instance with its own URI. Leave empty to reuse the Documents DB credentials (single-instance / local setup).",
+      "required": false,
+      "default": ""
+    },
+    "neo4j_ontology_username": {
+      "type": "string",
+      "title": "Ontology DB — Username",
+      "description": "Leave empty to reuse the Documents DB username.",
+      "required": false,
+      "default": ""
+    },
+    "neo4j_ontology_password": {
+      "type": "string",
+      "title": "Ontology DB — Password",
+      "description": "Leave empty to reuse the Documents DB password.",
+      "required": false,
+      "sensitive": true,
+      "default": ""
+    },
+    "neo4j_ontology_database": {
+      "type": "string",
+      "title": "Ontology DB — Database name",
+      "description": "Database where the ontology graph is stored (NodeType, PropertyDef, AliasMap, etc.). Aura: always 'neo4j'. Local: use a separate database name e.g. 'ontology'.",
+      "required": true,
+      "default": "neo4j"
+    },
+    "openai_api_key": {
+      "type": "string",
+      "title": "OpenAI API Key",
+      "description": "Required for embeddings (text-embedding-3-small). Also used for extraction when extraction_model is an OpenAI model. For other LLM providers, set the key in Extra Environment Variables below.",
+      "required": true,
+      "sensitive": true
+    },
+    "embedding_model": {
+      "type": "string",
+      "title": "Embedding Model",
+      "description": "OpenAI embedding model name",
+      "default": "text-embedding-3-small"
+    },
+    "extraction_model": {
+      "type": "string",
+      "title": "Extraction Model (LiteLLM format)",
+      "description": "LiteLLM model identifier. Examples: openai/gpt-5-mini, anthropic/claude-haiku-4-5-20251001, ollama/llama3.2",
+      "default": "openai/gpt-5-mini"
+    },
+    "extra_env": {
+      "type": "string",
+      "title": "Extra Environment Variables",
+      "description": "For non-OpenAI LLM providers. One KEY=VALUE per line.\n\nAnthropic:  ANTHROPIC_API_KEY=sk-ant-...\nAzure OpenAI:  AZURE_API_KEY=...  AZURE_API_BASE=https://....openai.azure.com  AZURE_API_VERSION=2024-02-01\nAWS Bedrock:  AWS_ACCESS_KEY_ID=...  AWS_SECRET_ACCESS_KEY=...  AWS_REGION_NAME=us-east-1\nOllama (local, no key needed):  set Extraction Model to ollama/llama3.2",
+      "required": false,
+      "default": ""
+    }
+  }
+}
