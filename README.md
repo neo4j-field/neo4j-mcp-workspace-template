@@ -43,21 +43,40 @@ If you use **Claude Desktop** (not one of the 6 coding tools above), install the
 ### Prerequisites
 
 1. **[uv](https://docs.astral.sh/uv/)** — must be installed before the extension can start (see [Installing uv](#installing-uv) below)
-2. **A running Neo4j instance** — [AuraDB free tier](https://neo4j.com/cloud/platform/aura-graph-database/) or [Neo4j Desktop](https://neo4j.com/download/)
-3. **An OpenAI API key** — for embeddings and entity extraction
+
+2. **Two Neo4j databases** — the workspace uses a **Documents DB** (chunks, entities) and an **Ontology DB** (extraction schema). Two options:
+
+   | Option | How |
+   |--------|-----|
+   | **Two Aura instances** | Create two free [AuraDB](https://neo4j.com/cloud/platform/aura-graph-database/) instances — one for documents, one for the ontology. Each has its own URI, username, and password. |
+   | **Neo4j Desktop (local)** | Install [Neo4j Desktop](https://neo4j.com/download/), create one DBMS, then add two databases inside it (e.g. `neo4j` and `ontology`). Both share the same URI and credentials. |
+
+   > **Aura free tier note:** each Aura instance has a single database named `neo4j` — you cannot create additional databases. Use two separate instances.
+
+3. **An OpenAI API key** — for embeddings and entity extraction (or configure another provider via Extra Environment Variables in the install dialog)
 
 ### Install
 
 1. Download `neo4j-mcp-workspace.dxt` from the [latest release](https://github.com/neo4j-field/neo4j-mcp-workspace-template/releases)
 2. Double-click the `.dxt` file — Claude Desktop opens an install dialog
-3. Fill in your Neo4j connection details and API key
-4. Click **Install** — all 5 MCP servers start automatically
+3. Fill in your credentials:
+   - **Documents DB** — URI, username, password, database name (e.g. `neo4j`)
+   - **Ontology DB** — URI, username, password, database name (e.g. `neo4j` on Aura, `ontology` on Desktop). Leave URI/username/password blank if using the same Neo4j instance as Documents DB.
+   - **OpenAI API key** — for embeddings; also used for extraction if your extraction model is OpenAI
+   - **Extraction model** — defaults to `openai/gpt-5-mini`; change to any [LiteLLM-compatible](https://docs.litellm.ai/docs/providers) model
+4. Click **Install** — all MCP servers start automatically
+
+### What makes it different
+
+The workspace stores your extraction ontology as a **graph in your Ontology DB**. Open it in **Neo4j Bloom** to visualize and edit it directly — add aliases, adjust blocklists, define new entity types — then ask Claude to re-extract. Changes are live immediately. No files, no code.
+
+→ See the [Claude Desktop Guide](docs/CLAUDE_DESKTOP.md) for the full workflow, Bloom editing, and troubleshooting.
 
 ### Providing files to the workspace
 
 The MCP servers run on your local machine and access your local filesystem. When Claude asks you for a PDF or CSV file, provide the **full path on your computer** (e.g. `/Users/alice/Documents/report.pdf` on Mac, `C:\Users\alice\Documents\report.pdf` on Windows).
 
-> Do not use the Claude Desktop file upload button to pass files to the workspace — uploaded files go to a sandbox the MCP servers cannot reach. Save the file to your disk and give Claude the path instead.
+> Do not use the Claude Desktop file upload button — uploaded files go to a sandbox the MCP servers cannot reach. Save the file to your disk and give Claude the path instead.
 
 ---
 
@@ -141,7 +160,7 @@ Extracts structured entities from lexical graph chunks using an LLM. Supports 10
 Read/write Cypher queries, vector search, fulltext search, and graph-traversal queries. Replaces the standalone Cypher server and adds RAG retrieval on top.
 
 - **Server:** `mcp-neo4j-graphrag` (local — cloned by `setup.sh`)
-- **Key tools:** `read_neo4j_cypher`, `write_neo4j_cypher`, `get_neo4j_schema_and_indexes`, `vector_search`, `fulltext_search`, `search_cypher_query`
+- **Key tools:** `read_neo4j_cypher`, `write_neo4j_cypher`, `get_neo4j_schema_and_indexes`, `vector_search`, `fulltext_search`, `search_cypher_query`, `read_node_image`
 - **Required credentials:** reads from `.env` via python-dotenv
 
 ### BigQuery (optional)
@@ -229,18 +248,34 @@ ollama pull qwen3:8b
 
 ### Other providers
 
-Any LiteLLM provider works. Examples:
+`setup.sh` only prompts for `OPENAI_API_KEY`. For other providers, run `setup.sh` first, then add the provider's credentials to `.env` manually:
 
 ```env
 # Anthropic
-EXTRACTION_MODEL=claude-haiku-4-5-20251001
+ANTHROPIC_API_KEY=sk-ant-...
+EXTRACTION_MODEL=anthropic/claude-haiku-4-5-20251001
 
 # Azure OpenAI
+AZURE_API_KEY=...
+AZURE_API_BASE=https://YOUR_RESOURCE.openai.azure.com
+AZURE_API_VERSION=2024-02-01
 EXTRACTION_MODEL=azure/gpt-4o-mini
 
-# Google
+# AWS Bedrock
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_REGION_NAME=us-east-1
+EXTRACTION_MODEL=bedrock/anthropic.claude-3-haiku-20240307-v1:0
+
+# Google Gemini
+GEMINI_API_KEY=...
 EXTRACTION_MODEL=gemini/gemini-2.0-flash
+
+# Ollama (local, no key needed — see section above)
+EXTRACTION_MODEL=ollama/qwen3:8b
 ```
+
+Full provider list: [docs.litellm.ai/docs/providers](https://docs.litellm.ai/docs/providers)
 
 ---
 

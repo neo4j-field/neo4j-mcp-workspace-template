@@ -1,7 +1,7 @@
 {
   "dxt_version": "0.1",
   "name": "neo4j-mcp-workspace",
-  "display_name": "Neo4j Graph Workspace",
+  "display_name": "Neo4j MCP Workspace",
   "version": "0.1.0",
   "description": "Build and query Neo4j knowledge graphs from CSV and PDF data",
   "author": {
