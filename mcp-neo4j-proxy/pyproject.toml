@@ -1,6 +1,6 @@
 [project]
 name = "mcp-neo4j-proxy"
-version = "0.2.0"
+version = "0.2.1"
 description = "Unified Neo4j MCP proxy — single entry point for all workspace servers"
 requires-python = ">=3.10"
 dependencies = [
@@ -16,3 +16,13 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mcp_neo4j_proxy"]
+exclude = [
+    "src/mcp_neo4j_proxy/skills",
+    "src/mcp_neo4j_proxy/skills/**",
+]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "src/mcp_neo4j_proxy/skills",
+    "src/mcp_neo4j_proxy/skills/**",
+]

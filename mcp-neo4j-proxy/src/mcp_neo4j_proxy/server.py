@@ -1,4 +1,5 @@
 import os
+import re
 
 from fastmcp import FastMCP
 from fastmcp.client.transports import StdioTransport
@@ -7,16 +8,18 @@ from fastmcp.server import create_proxy
 app = FastMCP("neo4j-mcp-workspace")
 
 
-# Parse EXTRA_ENV (KEY=VALUE lines) and inject into the process environment
+# Parse EXTRA_ENV (KEY=VALUE pairs) and inject into the process environment
 # before any subprocess is spawned. This supports non-OpenAI LiteLLM providers
 # (Anthropic, Azure OpenAI, AWS Bedrock, etc.) configured via the DXT installer.
+#
+# Pairs are separated by whitespace, commas, or semicolons, so users can paste
+# into either a single-line input or a multi-line textarea without learning a
+# delimiter. KEY must match [A-Z_][A-Z0-9_]* (standard env-var convention);
+# VALUE is any run of characters other than whitespace, comma, or semicolon.
 _extra_env_raw = os.environ.get("EXTRA_ENV", "").strip()
 if _extra_env_raw:
-    for _line in _extra_env_raw.splitlines():
-        _line = _line.strip()
-        if "=" in _line and not _line.startswith("#"):
-            _k, _, _v = _line.partition("=")
-            os.environ.setdefault(_k.strip(), _v.strip())
+    for _m in re.finditer(r"([A-Z_][A-Z0-9_]*)=([^\s,;]+)", _extra_env_raw):
+        os.environ.setdefault(_m.group(1), _m.group(2))
 
 
 def _docs_env() -> dict[str, str]:

@@ -2,7 +2,7 @@
   "dxt_version": "0.1",
   "name": "neo4j-mcp-workspace",
   "display_name": "Neo4j MCP Workspace",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Build and query Neo4j knowledge graphs from CSV and PDF data",
   "author": {
     "name": "Neo4j"
@@ -12,7 +12,7 @@
     "entry_point": "server.py",
     "mcp_config": {
       "command": "uvx",
-      "args": ["mcp-neo4j-proxy@0.2.0"],
+      "args": ["mcp-neo4j-proxy@0.2.1"],
       "env": {
         "NEO4J_URI": "${user_config.neo4j_uri}",
         "NEO4J_USERNAME": "${user_config.neo4j_username}",
@@ -109,7 +109,7 @@
     "extra_env": {
       "type": "string",
       "title": "Extra Environment Variables",
-      "description": "For non-OpenAI LLM providers. One KEY=VALUE per line.\n\nAnthropic:  ANTHROPIC_API_KEY=sk-ant-...\nAzure OpenAI:  AZURE_API_KEY=...  AZURE_API_BASE=https://....openai.azure.com  AZURE_API_VERSION=2024-02-01\nAWS Bedrock:  AWS_ACCESS_KEY_ID=...  AWS_SECRET_ACCESS_KEY=...  AWS_REGION_NAME=us-east-1\nOllama (local, no key needed):  set Extraction Model to ollama/llama3.2",
+      "description": "For non-OpenAI LLM providers. KEY=VALUE pairs separated by spaces or newlines (values cannot contain spaces).\n\nAnthropic:  ANTHROPIC_API_KEY=sk-ant-...\nAzure OpenAI:  AZURE_API_KEY=...  AZURE_API_BASE=https://....openai.azure.com  AZURE_API_VERSION=2024-08-01-preview\nAWS Bedrock:  AWS_ACCESS_KEY_ID=...  AWS_SECRET_ACCESS_KEY=...  AWS_REGION_NAME=us-east-1\nOllama (local, no key needed):  set Extraction Model to ollama/llama3.2",
       "required": false,
       "default": ""
     }
