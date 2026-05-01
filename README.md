@@ -70,6 +70,8 @@ If you use **Claude Desktop** (not one of the 6 coding tools above), install the
 
 The workspace stores your extraction ontology as a **graph in your Ontology DB**. Open it in **Neo4j Bloom** to visualize and edit it directly — add aliases, adjust blocklists, define new entity types — then ask Claude to re-extract. Changes are live immediately. No files, no code.
 
+A companion **SME skill** (`build-ontology-driven-graph`) walks non-developers through the full flow — install it via drag-drop from the [latest skill release](https://github.com/neo4j-field/neo4j-mcp-workspace-template/releases?q=skill-build-ontology). See [Install the SME skill](docs/CLAUDE_DESKTOP.md#install-the-sme-skill-recommended) in the Claude Desktop Guide.
+
 → See the [Claude Desktop Guide](docs/CLAUDE_DESKTOP.md) for the full workflow, Bloom editing, and troubleshooting.
 
 ### Providing files to the workspace

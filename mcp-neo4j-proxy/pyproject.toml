@@ -16,13 +16,3 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mcp_neo4j_proxy"]
-exclude = [
-    "src/mcp_neo4j_proxy/skills",
-    "src/mcp_neo4j_proxy/skills/**",
-]
-
-[tool.hatch.build.targets.sdist]
-exclude = [
-    "src/mcp_neo4j_proxy/skills",
-    "src/mcp_neo4j_proxy/skills/**",
-]

@@ -18,6 +18,25 @@ This is the core difference from the Claude Code path, where the schema is a loc
 
 ---
 
+## Install the SME skill (recommended)
+
+The workspace ships with an optional **`build-ontology-driven-graph`** skill that walks domain experts through the full flow — domain interview, ontology design, PDF parsing, extraction, refinement in Bloom — without requiring you to know which MCP tool to call when. It is the Claude Desktop equivalent of the `/develop-neo4j-graph` slash command that Claude Code users have.
+
+**Install:**
+
+1. Download `build-ontology-driven-graph.skill` from the [latest skill release](https://github.com/neo4j-field/neo4j-mcp-workspace-template/releases?q=skill-build-ontology) (separate from the DXT release)
+2. Drag the `.skill` file into a Claude Desktop conversation
+3. Claude Desktop installs it; it is then available in every future conversation
+
+Once installed, just describe your goal in plain language:
+> "I have a folder of contracts and I want to build a knowledge graph from them."
+
+Claude will trigger the skill automatically and lead you through the workflow.
+
+> The skill targets Claude Desktop only — it is not loaded by Claude Code or other coding tools (which use `/develop-neo4j-graph` instead).
+
+---
+
 ## End-to-end workflow
 
 ### 1. Set up the Ontology DB

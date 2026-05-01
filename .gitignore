@@ -12,6 +12,7 @@ build/
 develop-eggs/
 dist/
 *.dxt
+*.skill
 downloads/
 eggs/
 .eggs/
