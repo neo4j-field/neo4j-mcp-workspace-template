@@ -131,7 +131,15 @@ def create_mcp_server(
     # Use provided or create defaults
     _job_manager = job_manager or JobManager()
     _auto_workers = _suggest_max_workers()
-    _process_pool = process_pool or ProcessPoolExecutor(max_workers=_auto_workers)
+    # Use the "spawn" start method explicitly. On Linux the multiprocessing
+    # default is "fork", which forks the live, multithreaded async server and
+    # can deadlock (fork-after-threads). "spawn" is the default on macOS and is
+    # safe here: only picklable primitives cross the process boundary (the
+    # progress Queue is passed as None) and the worker entrypoint is top-level.
+    _process_pool = process_pool or ProcessPoolExecutor(
+        max_workers=_auto_workers,
+        mp_context=multiprocessing.get_context("spawn"),
+    )
 
     # ===========================================================
     # TOOL 1: create_lexical_graph (always async / background)
@@ -2578,7 +2586,12 @@ async def main(
     # Create shared components for background processing
     job_mgr = JobManager()
     auto_workers = _suggest_max_workers()
-    process_pool = ProcessPoolExecutor(max_workers=auto_workers)
+    # "spawn" avoids the fork-after-threads deadlock on Linux (default "fork");
+    # it is the macOS default. See create_mcp_server for the full rationale.
+    process_pool = ProcessPoolExecutor(
+        max_workers=auto_workers,
+        mp_context=multiprocessing.get_context("spawn"),
+    )
 
     logger.info("Process pool and job manager initialized", max_workers=auto_workers)
 
