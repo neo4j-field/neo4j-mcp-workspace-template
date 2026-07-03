@@ -217,6 +217,7 @@ __marimo__/
 .vscode/mcp.json
 opencode.json
 .codex/config.toml
+.vibe/config.toml
 .claude/settings.local.json
 .claude/skills/skill-creator/
 .claude/projects/

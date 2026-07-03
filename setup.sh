@@ -466,6 +466,54 @@ CODEXBQEOF
   fi
 }
 
+generate_vibe_config_toml() {
+  local output_file="$1"
+
+  cat > "$output_file" << VIBEEOF
+[[mcp_servers]]
+name = "neo4j-data-modeling"
+transport = "stdio"
+command = "uvx"
+args = ["mcp-neo4j-data-modeling@0.8.2", "--transport", "stdio"]
+
+[[mcp_servers]]
+name = "neo4j-ingest"
+transport = "stdio"
+command = "uv"
+args = ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-ingest", "run", "mcp-neo4j-ingest"]
+
+[[mcp_servers]]
+name = "neo4j-lexical-graph"
+transport = "stdio"
+command = "uv"
+args = ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-lexical-graph", "run", "mcp-neo4j-lexical-graph"]
+
+[[mcp_servers]]
+name = "neo4j-entity-graph"
+transport = "stdio"
+command = "uv"
+args = ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-entity-graph", "run", "mcp-neo4j-entity-graph"]
+
+[[mcp_servers]]
+name = "neo4j-graphrag"
+transport = "stdio"
+command = "uv"
+args = ["--directory", "${WORKSPACE_DIR}/mcp-neo4j-graphrag", "run", "mcp-neo4j-graphrag"]
+VIBEEOF
+
+  if [ "$INCLUDE_BIGQUERY" = true ]; then
+    cat >> "$output_file" << VIBEBQEOF
+
+[[mcp_servers]]
+name = "bigquery"
+transport = "stdio"
+command = "toolbox"
+args = ["--prebuilt", "bigquery", "--stdio"]
+env = { BIGQUERY_PROJECT = "${BIGQUERY_PROJECT}" }
+VIBEBQEOF
+  fi
+}
+
 mkdir -p "$WORKSPACE_DIR/.cursor"
 
 generate_mcp_json "$WORKSPACE_DIR/.cursor/mcp.json"
@@ -489,6 +537,10 @@ mkdir -p "$WORKSPACE_DIR/.codex"
 generate_codex_toml "$WORKSPACE_DIR/.codex/config.toml"
 success ".codex/config.toml written (OpenAI Codex CLI)"
 
+mkdir -p "$WORKSPACE_DIR/.vibe"
+generate_vibe_config_toml "$WORKSPACE_DIR/.vibe/config.toml"
+success ".vibe/config.toml written (Mistral Vibe)"
+
 # ─────────────────────────────────────────────────────────────
 # Done
 # ─────────────────────────────────────────────────────────────
@@ -497,13 +549,14 @@ echo -e "${GREEN}${BOLD}══════════════════�
 echo -e "${GREEN}${BOLD}  Setup complete!                               ${RESET}"
 echo -e "${GREEN}${BOLD}════════════════════════════════════════════════${RESET}"
 echo ""
-echo "  MCP configs generated for 6 tools:"
+echo "  MCP configs generated for 7 tools:"
 echo "    • Claude Code    → .mcp.json"
 echo "    • Cursor         → .cursor/mcp.json"
 echo "    • Gemini CLI     → .gemini/settings.json"
 echo "    • Copilot VS Code→ .vscode/mcp.json"
 echo "    • OpenCode       → opencode.json"
 echo "    • Codex CLI      → .codex/config.toml"
+echo "    • Mistral Vibe   → .vibe/config.toml"
 echo ""
 echo "  Open the workspace in your AI coding tool:"
 echo "    • Claude Code    : claude  (then /setup-workspace to verify)"
@@ -512,6 +565,7 @@ echo "    • Gemini CLI     : gemini"
 echo "    • Copilot VS Code: open this folder in VS Code, use Agent mode"
 echo "    • OpenCode       : opencode"
 echo "    • Codex CLI      : codex"
+echo "    • Mistral Vibe   : vibe  (trust the folder when prompted)"
 echo ""
 echo "  Re-run this script any time to regenerate config files."
 echo ""
