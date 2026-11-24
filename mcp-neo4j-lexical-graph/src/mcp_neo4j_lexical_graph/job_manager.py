@@ -43,15 +43,15 @@ class JobInfo(BaseModel):
 
     # Pre-flight info
     files_total: int = Field(default=1)
-    total_pages_expected: int = Field(default=0)
+    source_pages_expected: int = Field(default=0)
 
     # Progress tracking
     current_file: Optional[str] = None
-    current_file_pages: int = 0
+    current_file_source_page_count: int = 0
     current_stage: Optional[str] = None
     files_completed: int = 0
     files_failed: int = 0
-    total_pages_processed: int = 0
+    source_pages_processed: int = 0
     total_elements_extracted: int = 0
 
     # Results (populated on completion)
@@ -85,12 +85,15 @@ class JobInfo(BaseModel):
         if self.status == JobStatus.QUEUED:
             return (
                 f"Queued: {self.files_total} file(s) "
-                f"({self.total_pages_expected} pages) with {self.parse_mode} mode."
+                f"({self.source_pages_expected} source pages) with {self.parse_mode} mode."
             )
         elif self.status in (JobStatus.PARSING, JobStatus.WRITING):
             stage = self.current_stage or self.status.value
             file_info = f" {self.current_file}" if self.current_file else ""
-            page_info = f" ({self.current_file_pages} pages)" if self.current_file_pages else ""
+            page_info = (
+                f" ({self.current_file_source_page_count} source pages)"
+                if self.current_file_source_page_count else ""
+            )
             progress = f"{self.files_completed}/{self.files_total} documents complete"
             eta = self.estimated_remaining_seconds
             eta_str = f" - ~{_format_duration(eta)} remaining" if eta is not None else ""
@@ -100,7 +103,7 @@ class JobInfo(BaseModel):
             fails = f" {self.files_failed} failed." if self.files_failed else ""
             return (
                 f"Complete: {self.files_completed}/{self.files_total} documents "
-                f"({self.total_pages_processed} pages, "
+                f"({self.source_pages_processed} source pages, "
                 f"{self.total_elements_extracted} elements) in {dur}.{fails}"
             )
         elif self.status == JobStatus.FAILED:
@@ -123,9 +126,10 @@ class JobInfo(BaseModel):
             "files_failed": self.files_failed,
             "files_remaining": self.files_remaining,
             "current_file": self.current_file,
-            "current_file_pages": self.current_file_pages,
+            "currentFileSourcePageCount": self.current_file_source_page_count,
             "current_stage": self.current_stage,
-            "total_pages_processed": self.total_pages_processed,
+            "sourcePagesExpected": self.source_pages_expected,
+            "sourcePagesProcessed": self.source_pages_processed,
             "total_elements_extracted": self.total_elements_extracted,
             "message": self.message,
         }
@@ -153,7 +157,7 @@ class JobManager:
         parse_mode: str,
         is_folder: bool,
         files_total: int,
-        total_pages_expected: int,
+        source_pages_expected: int,
     ) -> JobInfo:
         """Create a new job and return it."""
         job_id = uuid.uuid4().hex[:12]
@@ -163,11 +167,11 @@ class JobManager:
             parse_mode=parse_mode,
             is_folder=is_folder,
             files_total=files_total,
-            total_pages_expected=total_pages_expected,
+            source_pages_expected=source_pages_expected,
         )
         self._jobs[job_id] = job
         logger.info("Job created", job_id=job_id, parse_mode=parse_mode,
-                     files=files_total, pages=total_pages_expected)
+                     files=files_total, source_pages=source_pages_expected)
         return job
 
     def get_job(self, job_id: str) -> Optional[JobInfo]:

@@ -22,6 +22,7 @@ import structlog
 from pydantic import BaseModel
 
 from .models import (
+    ChunkExtractionOutcome,
     ChunkExtractionResult,
     ClassifiedChunk,
     EntityTypeSchema,
@@ -34,7 +35,7 @@ from .models import (
 
 logger = structlog.get_logger()
 
-DEFAULT_EXTRACTION_MODEL = "gpt-5.4-mini"
+DEFAULT_EXTRACTION_MODEL = "gpt-6-luna"
 
 
 def build_system_prompt(schema: ExtractionSchema) -> str:
@@ -263,10 +264,17 @@ def parse_extraction_response(
 ) -> ChunkExtractionResult:
     """Parse LLM response into ChunkExtractionResult using the strongly-typed Pydantic model."""
     if not content:
-        return ChunkExtractionResult(chunk_id=chunk_id)
+        return ChunkExtractionResult(
+            chunk_id=chunk_id,
+            outcome=ChunkExtractionOutcome.FAILED,
+            error="Model returned a blank structured response",
+        )
 
     try:
-        return _parse_typed_response(content, schema, chunk_id, output_model)
+        result = _parse_typed_response(content, schema, chunk_id, output_model)
+        if not result.entities and not result.relationships:
+            result.outcome = ChunkExtractionOutcome.EMPTY
+        return result
     except Exception as e:
         logger.error(
             "Failed to parse extraction response",
@@ -274,7 +282,11 @@ def parse_extraction_response(
             error=str(e),
             content_preview=content[:500],
         )
-        return ChunkExtractionResult(chunk_id=chunk_id)
+        return ChunkExtractionResult(
+            chunk_id=chunk_id,
+            outcome=ChunkExtractionOutcome.FAILED,
+            error=f"Failed to parse structured response: {e}",
+        )
 
 
 _SKIP_SENTINEL = "__SKIP__"
@@ -402,7 +414,12 @@ def build_llm_params(
     }
 
     model_lower = model.lower()
-    if "gpt-5" in model_lower:
+    if "gpt-6" in model_lower:
+        params["reasoning_effort"] = "low"
+        # The pinned LiteLLM registry predates GPT-6. Allow this OpenAI parameter
+        # for these requests without changing parameter handling for other models.
+        params["allowed_openai_params"] = ["reasoning_effort"]
+    elif "gpt-5" in model_lower:
         params["reasoning_effort"] = "low"
     elif "o1" in model_lower or "o3" in model_lower:
         pass  # no temperature for reasoning models

@@ -48,10 +48,16 @@ class ExtractionJobInfo(BaseModel):
     total_chunks: int = Field(default=0)
     text_chunks: int = Field(default=0)
     vlm_chunks: int = Field(default=0)
+    eligible_sources: int = Field(default=0)
+    selected_sources: int = Field(default=0)
 
     # Progress
     chunks_completed: int = 0
     chunks_failed: int = 0
+    sources_attempted: int = 0
+    sources_succeeded: int = 0
+    sources_empty: int = 0
+    sources_failed: int = 0
     entities_extracted: int = 0
     relationships_extracted: int = 0
     batches_written: int = 0
@@ -60,6 +66,9 @@ class ExtractionJobInfo(BaseModel):
     entities_created: int = 0
     relationships_created: int = 0
     extracted_from_created: int = 0
+    sources_persisted: int = 0
+    failed_source_ids: list[str] = Field(default_factory=list)
+    failure_details: dict[str, str] = Field(default_factory=dict)
     error: Optional[str] = None
 
     @property
@@ -119,6 +128,15 @@ class ExtractionJobInfo(BaseModel):
             "total_chunks": self.total_chunks,
             "text_chunks": self.text_chunks,
             "vlm_chunks": self.vlm_chunks,
+            "eligible_sources": self.eligible_sources,
+            "selected_sources": self.selected_sources,
+            "sources_attempted": self.sources_attempted,
+            "sources_succeeded": self.sources_succeeded,
+            "sources_empty": self.sources_empty,
+            "sources_failed": self.sources_failed,
+            "sources_persisted": self.sources_persisted,
+            "failed_source_ids": self.failed_source_ids,
+            "failure_details": self.failure_details,
             "chunks_completed": self.chunks_completed,
             "chunks_failed": self.chunks_failed,
             "chunks_remaining": self.chunks_remaining,
@@ -127,10 +145,9 @@ class ExtractionJobInfo(BaseModel):
             "batches_written": self.batches_written,
             "message": self.message,
         }
-        if self.status == JobStatus.COMPLETE:
-            d["entities_created"] = self.entities_created
-            d["relationships_created"] = self.relationships_created
-            d["extracted_from_created"] = self.extracted_from_created
+        d["entities_created"] = self.entities_created
+        d["relationships_created"] = self.relationships_created
+        d["extracted_from_created"] = self.extracted_from_created
         if self.error:
             d["error"] = self.error
         return d
@@ -149,6 +166,8 @@ class JobManager:
         total_chunks: int,
         text_chunks: int,
         vlm_chunks: int,
+        eligible_sources: Optional[int] = None,
+        selected_sources: Optional[int] = None,
         pass_type: PassType = PassType.FULL,
         pass_number: int = 1,
     ) -> ExtractionJobInfo:
@@ -159,6 +178,8 @@ class JobManager:
             total_chunks=total_chunks,
             text_chunks=text_chunks,
             vlm_chunks=vlm_chunks,
+            eligible_sources=eligible_sources if eligible_sources is not None else total_chunks,
+            selected_sources=selected_sources if selected_sources is not None else total_chunks,
             pass_type=pass_type,
             pass_number=pass_number,
         )

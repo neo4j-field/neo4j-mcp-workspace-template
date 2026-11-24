@@ -93,7 +93,69 @@ _TIME_PER_PAGE: dict[str, float] = {
 _WARNING_THRESHOLD_SECONDS = 120
 
 
-DEFAULT_EXTRACTION_MODEL = "gpt-5.4-mini"
+DEFAULT_EXTRACTION_MODEL = "gpt-6-luna"
+
+
+async def _ensure_vector_index(
+    driver: AsyncDriver,
+    database: str,
+    index_name: str,
+    node_label: str,
+    embedding_prop: str,
+    dimensions: int,
+    prefilter_properties: list[str],
+) -> dict[str, str]:
+    """Create a vector index and verify the actual index before reporting success."""
+    index_options = (
+        "OPTIONS {indexConfig: {`vector.dimensions`: $dims, "
+        "`vector.similarity_function`: 'cosine'}}"
+    )
+    plain_query = (
+        f"CYPHER 25 CREATE VECTOR INDEX `{index_name}` IF NOT EXISTS "
+        f"FOR (c:`{node_label}`) ON c.`{embedding_prop}` {index_options}"
+    )
+    prefilter_query = plain_query.replace(
+        index_options,
+        "WITH [" + ", ".join(f"c.`{prop}`" for prop in prefilter_properties) + "] " + index_options,
+    )
+
+    async def create(query: str) -> None:
+        async with driver.session(database=database) as session:
+            result = await session.run(query, dims=dimensions)
+            await result.consume()
+
+    prefilter_error = None
+    if prefilter_properties:
+        try:
+            await create(prefilter_query)
+        except Exception as exc:
+            prefilter_error = exc
+            logger.warning("Prefiltered vector index unavailable; trying plain index", error=str(exc))
+            try:
+                await create(plain_query)
+            except Exception as plain_exc:
+                raise RuntimeError(
+                    f"Vector index '{index_name}' failed with prefilters ({prefilter_error}) "
+                    f"and without them ({plain_exc})"
+                ) from plain_exc
+    else:
+        await create(plain_query)
+
+    async with driver.session(database=database) as session:
+        result = await session.run(
+            "SHOW VECTOR INDEXES YIELD name, state, createStatement "
+            "WHERE name = $name RETURN name, state, createStatement",
+            name=index_name,
+        )
+        record = await result.single()
+    if record is None:
+        raise RuntimeError(f"Vector index '{index_name}' was not created")
+    state = record["state"]
+    if state not in {"ONLINE", "POPULATING"}:
+        raise RuntimeError(f"Vector index '{index_name}' is {state}")
+    statement = record["createStatement"] or ""
+    mode = "prefiltered" if " WITH [" in statement.upper() else "plain"
+    return {"name": index_name, "state": state, "mode": mode}
 
 
 def _suggest_max_workers() -> int:
@@ -267,7 +329,7 @@ def create_mcp_server(
             parse_mode=parse_mode,
             is_folder=is_folder,
             files_total=files_total,
-            total_pages_expected=total_pages,
+            source_pages_expected=total_pages,
         )
 
         # Prepare common kwargs for the worker
@@ -312,7 +374,7 @@ def create_mcp_server(
             "job_id": job.id,
             "status": "queued",
             "files_total": files_total,
-            "total_pages": total_pages,
+            "sourcePageCount": total_pages,
             "estimated_minutes": estimated_minutes,
             "max_parallel": effective_parallel,
             "message": (
@@ -350,7 +412,7 @@ def create_mcp_server(
         """Check the status of background lexical graph processing jobs.
 
         Returns progress info including elapsed time, estimated remaining time,
-        files completed/remaining, pages processed, and elements extracted.
+        files completed/remaining, source pages processed, and elements extracted.
         """
         if job_id:
             job = _job_manager.get_job(job_id)
@@ -446,7 +508,11 @@ def create_mcp_server(
     async def chunk_lexical_graph(
         document_id: Optional[str] = Field(
             None,
-            description="Document version id to chunk. If None, chunks all active documents without chunks.",
+            description=(
+                "Document version id to chunk. If None, chunks all active eligible "
+                "documents without chunks, or rebuilds all of them when "
+                "clear_existing_chunks is True."
+            ),
         ),
         strategy: str = Field(
             "token_window",
@@ -511,7 +577,10 @@ def create_mcp_server(
                     d["id"]
                     for d in all_docs
                     if d.get("active")
-                    and d.get("totalChunkCount", 0) == 0
+                    and (
+                        clear_existing_chunks
+                        or d.get("totalChunkCount", 0) == 0
+                    )
                     and d.get("parseMode") not in ("pymupdf", "text_only", "page_image")
                 ]
                 if not doc_ids:
@@ -585,7 +654,8 @@ def create_mcp_server(
                                 "version": v.get("version"),
                                 "active": v.get("active"),
                                 "parseMode": v.get("parseMode"),
-                                "pages": v.get("pageCount"),
+                                "sourcePageCount": v.get("sourcePageCount"),
+                                "pageNodeCount": v.get("pageNodeCount"),
                                 "elements": v.get("elementCount"),
                                 "sections": v.get("sectionCount"),
                                 "chunks": v.get("totalChunkCount"),
@@ -668,7 +738,8 @@ def create_mcp_server(
 
             stats = {
                 "parseMode": parse_mode,
-                "pages": len(pages),
+                "sourcePageCount": doc.get("totalPages", len(pages)),
+                "pageNodeCount": len(pages),
                 "elements": len(elements),
                 "elements_by_type": type_counts,
                 "sections": len(sections),
@@ -1217,8 +1288,8 @@ def create_mcp_server(
             default=["documentName", "type"],
             description=(
                 "Properties used as prefilters on the vector index for efficient filtered search. "
-                "Default: ['documentName', 'type']. Supports multiple properties (Neo4j 5.18+ WITH [...] syntax). "
-                "Set to null or [] to create a plain vector index with no prefilter."
+                "Default: ['documentName', 'type']. Additional prefilter properties require Neo4j 2026.01+. "
+                "Older servers fall back to a plain vector index. Set to null or [] to request a plain index."
             ),
         ),
         document_id: Optional[str] = Field(
@@ -1266,7 +1337,8 @@ def create_mcp_server(
           Adds metadata properties to the vector index for efficient filtered search.
           Default ['documentName', 'type'] lets you search within a document or by node type
           (e.g. only table descriptions, only text chunks).
-          Uses Neo4j 5.18+ WITH [...] syntax — requires Neo4j 5.18 or later.
+          Additional prefilter properties require Neo4j 2026.01+. Older servers
+          fall back to a plain vector index, and the result reports the actual mode.
 
         **Fulltext index:**
           Created on text_property (and text_property_fallback if set), covering both raw text
@@ -1357,10 +1429,35 @@ def create_mcp_server(
                 records = await result.data()
 
             if not records:
+                # Embeddings can be present while index creation failed on an
+                # earlier run. Repair the index even when no model call is due.
+                async with neo4j_driver.session(database=database) as session:
+                    result = await session.run(
+                        f"CYPHER 25 MATCH (c:`{node_label}`) "
+                        f"WHERE c.`{embedding_prop}` IS NOT NULL "
+                        f"RETURN size(c.`{embedding_prop}`) AS dims LIMIT 1"
+                    )
+                    existing = await result.single()
+                if existing:
+                    index_name = f"{node_label.lower()}_{embedding_prop}"
+                    vector_index = await _ensure_vector_index(
+                        neo4j_driver, database, index_name, node_label,
+                        embedding_prop, existing["dims"],
+                        index_prefilter_properties or [],
+                    )
+                    return json.dumps({
+                        "status": "success",
+                        "message": f"No {node_label} nodes need embedding; vector index verified.",
+                        "embedded": 0,
+                        "vector_index": index_name,
+                        "vector_index_mode": vector_index["mode"],
+                        "vector_index_state": vector_index["state"],
+                    })
                 return json.dumps({
-                    "status": "success",
-                    "message": f"No {node_label} nodes need embedding.",
+                    "status": "no_work",
+                    "message": f"No {node_label} nodes have embeddings to index.",
                     "embedded": 0,
+                    "vector_index": None,
                 })
 
             logger.info(f"Embedding {len(records)} {node_label} nodes")
@@ -1393,40 +1490,12 @@ def create_mcp_server(
 
             # Create vector index
             index_name = f"{node_label.lower()}_{embedding_prop}"
+            vector_index = None
             if dims > 0:
-                try:
-                    async with neo4j_driver.session(database=database) as session:
-                        prefilter_props = index_prefilter_properties or []
-                        if prefilter_props:
-                            prefilter_list = ", ".join(f"c.`{p}`" for p in prefilter_props)
-                            await session.run(
-                                f"""
-                                CYPHER 25
-                                CREATE VECTOR INDEX `{index_name}` IF NOT EXISTS
-                                FOR (c:`{node_label}`) ON c.`{embedding_prop}`
-                                WITH [{prefilter_list}]
-                                OPTIONS {{indexConfig: {{
-                                    `vector.dimensions`: $dims,
-                                    `vector.similarity_function`: 'cosine'
-                                }}}}
-                                """,
-                                dims=dims,
-                            )
-                        else:
-                            await session.run(
-                                f"""
-                                CYPHER 25
-                                CREATE VECTOR INDEX `{index_name}` IF NOT EXISTS
-                                FOR (c:`{node_label}`) ON c.`{embedding_prop}`
-                                OPTIONS {{indexConfig: {{
-                                    `vector.dimensions`: $dims,
-                                    `vector.similarity_function`: 'cosine'
-                                }}}}
-                                """,
-                                dims=dims,
-                            )
-                except Exception as e:
-                    logger.warning(f"Vector index note: {e}")
+                vector_index = await _ensure_vector_index(
+                    neo4j_driver, database, index_name, node_label, embedding_prop,
+                    dims, index_prefilter_properties or [],
+                )
 
             if create_fulltext_index:
                 # Index the resolved text property(ies) for fulltext search
@@ -1445,7 +1514,7 @@ def create_mcp_server(
                     logger.warning(f"Fulltext index note: {e}")
 
             prefilter_props = index_prefilter_properties or []
-            prefilter_msg = f" with {prefilter_props} prefilter" if prefilter_props else ""
+            prefilter_msg = f" ({vector_index['mode']}, {vector_index['state']})" if vector_index else " (no embeddings)"
             auto_msg = (
                 " (auto-detected textDescription on Chunk nodes — "
                 "using textDescription with text fallback)"
@@ -1464,9 +1533,12 @@ def create_mcp_server(
                     "embedded": total_updated,
                     "dimensions": dims,
                     "vector_index": index_name,
+                    "vector_index_mode": vector_index["mode"] if vector_index else None,
+                    "vector_index_state": vector_index["state"] if vector_index else None,
                     "message": (
                         f"Embedded {total_updated} {node_label} nodes (VECTOR FLOAT32, {dims}d). "
-                        f"Vector index '{index_name}'{prefilter_msg} created.{auto_msg}"
+                        f"Vector index '{index_name}'{prefilter_msg} "
+                        f"{'verified' if vector_index else 'not created because no embeddings were written'}.{auto_msg}"
                     ),
                 },
                 indent=2,
@@ -1759,7 +1831,7 @@ async def _run_job(
     output_dir: str,
     document_id: Optional[str],
     parse_kwargs: dict[str, Any],
-    extraction_model: str = "gpt-5.4-mini",
+    extraction_model: str = "gpt-6-luna",
     max_parallel: int = 1,
 ) -> None:
     """Background task that orchestrates parallel-parse, sequential-write processing.
@@ -1814,7 +1886,7 @@ async def _run_job(
                 job_manager.update_progress(
                     job_id,
                     current_file=current_file_label,
-                    current_file_pages=page_count,
+                    current_file_source_page_count=page_count,
                     current_stage="parsing",
                 )
 
@@ -1951,8 +2023,8 @@ async def _run_job(
                     job_manager.update_progress(
                         job_id,
                         files_completed=job_manager.get_job(job_id).files_completed + 1,
-                        total_pages_processed=(
-                            job_manager.get_job(job_id).total_pages_processed + page_count
+                        source_pages_processed=(
+                            job_manager.get_job(job_id).source_pages_processed + page_count
                         ),
                         total_elements_extracted=(
                             job_manager.get_job(job_id).total_elements_extracted
@@ -2197,7 +2269,8 @@ async def _write_pymupdf_result(
         "document_id": doc_id,
         "source_id": result["source_id"],
         "version": result["version"],
-        "pages": result["total_pages"],
+        "sourcePageCount": result["total_pages"],
+        "pageNodeCount": 0,
         "elements": len(element_records),
         "images": result["fig_counter"],
         "tables": result["tbl_counter"],

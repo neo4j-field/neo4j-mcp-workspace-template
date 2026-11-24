@@ -1,0 +1,138 @@
+name: Test suite
+
+on:
+  workflow_call:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-and-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Validate MCP and skill contracts
+        run: >-
+          python -m unittest
+          tests.contracts.test_workflow_contracts
+          tests.contracts.test_ci_release_gates -v
+      - name: Validate synthetic extraction golden set and scorer
+        run: python -m unittest tests.golden.test_evaluate -v
+      - name: Validate runtime Desktop schemas and lexical behavior
+        run: >-
+          uv run --project mcp-neo4j-lexical-graph python -m unittest
+          tests.contracts.test_desktop_lexical_runtime_contract
+          tests.unit.test_lexical_chunk_rebuild
+          tests.unit.test_lexical_page_accounting
+          tests.unit.test_lexical_parser_modes
+          tests.unit.test_vector_index_fallback -v
+      - name: Validate safe ingest query compilation
+        run: >-
+          uv run --project mcp-neo4j-ingest python -m unittest
+          tests.unit.test_ingest_query_compiler -v
+      - name: Validate entity extraction coverage and relationship persistence
+        run: >-
+          uv run --project mcp-neo4j-entity-graph python -m unittest
+          tests.unit.test_entity_extraction_coverage
+          tests.unit.test_entity_relationship_persistence
+          tests.unit.test_gpt6_extraction_params
+          tests.golden.test_schema -v
+      - name: Validate report completion contracts
+        run: >-
+          uv run --project mcp-neo4j-proxy python -m unittest
+          discover -s tests/report_validation -v
+
+  neo4j-integration:
+    runs-on: ubuntu-latest
+    services:
+      neo4j:
+        image: neo4j:5.26-community
+        env:
+          NEO4J_AUTH: neo4j/test-password
+        ports:
+          - 7474:7474
+          - 7687:7687
+        options: >-
+          --health-cmd "cypher-shell -u neo4j -p test-password 'RETURN 1'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      NEO4J_MCP_RUN_INTEGRATION: "1"
+      NEO4J_URI: bolt://localhost:7687
+      NEO4J_USERNAME: neo4j
+      NEO4J_PASSWORD: test-password
+      NEO4J_DATABASE: neo4j
+      OPENAI_API_KEY: ci-not-used
+      EMBEDDING_MODEL: text-embedding-3-small
+      EXTRACTION_MODEL: gpt-6-luna
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Run structured-ingest integration
+        run: >-
+          uv run --project mcp-neo4j-ingest python -m unittest
+          tests.integration.test_structured_ingest_mcp -v
+      - name: Run lexical graph integrations
+        run: >-
+          uv run --project mcp-neo4j-lexical-graph python -m unittest
+          tests.integration.test_lexical_chunk_rebuild_mcp
+          tests.integration.test_lexical_page_accounting_mcp -v
+      - name: Run entity and ontology integrations
+        run: >-
+          uv run --project mcp-neo4j-entity-graph python -m unittest
+          tests.integration.test_entity_relationship_persistence_mcp
+          tests.integration.test_entity_extraction_coverage_mcp
+          tests.integration.test_ontology_workflow_mcp -v
+
+  desktop-smoke:
+    runs-on: ubuntu-latest
+    services:
+      neo4j:
+        image: neo4j:5.26-community
+        env:
+          NEO4J_AUTH: neo4j/test-password
+        ports:
+          - 7474:7474
+          - 7687:7687
+        options: >-
+          --health-cmd "cypher-shell -u neo4j -p test-password 'RETURN 1'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      NEO4J_MCP_RUN_DESKTOP_SMOKE: "1"
+      NEO4J_MCP_DESKTOP_SMOKE_SKIP_EMBEDDING: "1"
+      NEO4J_URI: bolt://localhost:7687
+      NEO4J_USERNAME: neo4j
+      NEO4J_PASSWORD: test-password
+      NEO4J_DATABASE: neo4j
+      NEO4J_ONTOLOGY_DATABASE: neo4j
+      OPENAI_API_KEY: ci-not-used
+      EMBEDDING_MODEL: text-embedding-3-small
+      EXTRACTION_MODEL: gpt-6-luna
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Run exact-DXT headless ingestion smoke
+        run: >-
+          uv run --project mcp-neo4j-proxy python -m unittest
+          tests.integration.test_desktop_lexical_smoke_mcp -v

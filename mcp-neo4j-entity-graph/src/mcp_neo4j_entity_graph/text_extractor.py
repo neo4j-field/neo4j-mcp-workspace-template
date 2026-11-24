@@ -20,6 +20,7 @@ from .base_extractor import (
     parse_extraction_response,
 )
 from .models import (
+    ChunkExtractionOutcome,
     ChunkExtractionResult,
     ClassifiedChunk,
     ExtractionSchema,
@@ -74,6 +75,9 @@ class TextExtractor:
                     content, schema, chunk.id, output_model
                 )
 
+                if result.outcome == ChunkExtractionOutcome.FAILED:
+                    raise ValueError(result.error or "structured response parse failed")
+
                 if result.entities or result.relationships:
                     logger.debug(
                         "Text extraction success",
@@ -81,7 +85,7 @@ class TextExtractor:
                         entities=len(result.entities),
                         relationships=len(result.relationships),
                     )
-
+                result.attempts = attempt + 1
                 return result
 
             except litellm.RateLimitError as e:
@@ -92,7 +96,12 @@ class TextExtractor:
                 )
                 if attempt == self.max_retries - 1:
                     logger.error("Rate limit exhausted", chunk_id=chunk.id)
-                    return ChunkExtractionResult(chunk_id=chunk.id)
+                    return ChunkExtractionResult(
+                        chunk_id=chunk.id,
+                        outcome=ChunkExtractionOutcome.FAILED,
+                        attempts=attempt + 1,
+                        error=f"Rate limit exhausted after {attempt + 1} attempts: {e}",
+                    )
                 await asyncio.sleep(2 ** (attempt + 2))
 
             except Exception as e:
@@ -104,10 +113,20 @@ class TextExtractor:
                 )
                 if attempt == self.max_retries - 1:
                     logger.error("All text extraction attempts failed", chunk_id=chunk.id)
-                    return ChunkExtractionResult(chunk_id=chunk.id)
+                    return ChunkExtractionResult(
+                        chunk_id=chunk.id,
+                        outcome=ChunkExtractionOutcome.FAILED,
+                        attempts=attempt + 1,
+                        error=f"Text extraction failed after {attempt + 1} attempts: {e}",
+                    )
                 await asyncio.sleep(2**attempt)
 
-        return ChunkExtractionResult(chunk_id=chunk.id)
+        return ChunkExtractionResult(
+            chunk_id=chunk.id,
+            outcome=ChunkExtractionOutcome.FAILED,
+            attempts=self.max_retries,
+            error="Text extraction ended without a result",
+        )
 
     async def extract_many(
         self,

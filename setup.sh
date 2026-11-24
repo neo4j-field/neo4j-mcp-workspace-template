@@ -78,14 +78,14 @@ else
 
   echo ""
   echo -e "${BOLD}── Embedding & extraction models ────────────────────${RESET}"
-  echo "  Examples: text-embedding-3-small, gpt-5.4-mini"
+  echo "  Examples: text-embedding-3-small, gpt-6-luna"
   echo ""
 
   read -r -p "  EMBEDDING_MODEL  [text-embedding-3-small]: " input_embed
   EMBEDDING_MODEL="${input_embed:-text-embedding-3-small}"
 
-  read -r -p "  EXTRACTION_MODEL [gpt-5.4-mini]: " input_extract
-  EXTRACTION_MODEL="${input_extract:-gpt-5.4-mini}"
+  read -r -p "  EXTRACTION_MODEL [gpt-6-luna]: " input_extract
+  EXTRACTION_MODEL="${input_extract:-gpt-6-luna}"
 
   # Write .env
   cat > "$ENV_FILE" << EOF
@@ -121,7 +121,7 @@ NEO4J_PASSWORD="${NEO4J_PASSWORD:-}"
 NEO4J_DATABASE="${NEO4J_DATABASE:-neo4j}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 EMBEDDING_MODEL="${EMBEDDING_MODEL:-text-embedding-3-small}"
-EXTRACTION_MODEL="${EXTRACTION_MODEL:-gpt-5.4-mini}"
+EXTRACTION_MODEL="${EXTRACTION_MODEL:-gpt-6-luna}"
 
 # ─────────────────────────────────────────────────────────────
 # 4. Clone graphrag server

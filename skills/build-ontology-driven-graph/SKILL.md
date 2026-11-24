@@ -57,6 +57,10 @@ The proxy exposes ~50 tools. The ones below are the ones this skill actually use
 - `check_extraction_status` — poll the async job
 - `cancel_extraction` — stop a running extraction if needed
 
+**Completion**:
+- `validate_workflow_report` — deterministically checks the final report before the
+  workflow claims completion
+
 There are two graphrag instances mounted on the proxy. The `documents_*` namespace queries the documents knowledge graph; the `ontology_*` namespace queries the ontology metadata graph. The namespace prefix is part of the tool name — they are different tools.
 
 ---
@@ -133,7 +137,11 @@ This is the most important phase. The whole ontology hangs off the answers here.
 Otherwise, before starting the interview, kick off PDF parsing so chunks exist by the time you need to sample content. Call:
 
 ```
-create_lexical_graph(directory_path="<the folder>", parse_mode="pymupdf")
+create_lexical_graph(
+    path="<the folder>",
+    output_dir="<the folder>/.neo4j-mcp-output",
+    parse_mode="pymupdf",
+)
 ```
 
 `pymupdf` is the fast default and works for born-digital PDFs (the common case). It runs in the background — the call returns immediately with a job ID. While it runs, talk to the user. You will verify parse quality and embed chunks in Phase 3.1 (before the ontology design needs evidence from chunks). If pymupdf produced unusable chunks, you will fall back to `page_image` there — see `references/lexical-graph-pipeline.md`.
@@ -209,7 +217,7 @@ This is fast and runs in the background. Then verify the embeddings actually lan
 ```cypher
 // via documents_read_neo4j_cypher
 MATCH (c:Chunk)
-RETURN count(c) AS total, count(c.embedding) AS embedded
+RETURN count(c) AS total, count(c.text_embedding) AS embedded
 ```
 
 If `embedded < total`, embedding is incomplete. Re-run `embed_chunks()` and verify again. Don't move on until `embedded == total` (or vector search will fail in Phase 8).
@@ -233,6 +241,11 @@ For each entity type:
 
 1. Propose to the user: "I see Contract, Party, and Jurisdiction in your documents. I'd model these as: Contract (entity), Party (entity), Jurisdiction (property of Contract). The reasoning: [one sentence]. OK?"
 2. After they confirm, write it to the Ontology DB via `ontology_write_neo4j_cypher`. Use `MERGE` (idempotent) following the contract in `references/ontology-db-schema.md`. Critical points: every `:NodeType` needs **exactly one** `:PropertyDef` with `is_key=true`. Property names use `camelCase`. Relationship type names use `SCREAMING_SNAKE_CASE`.
+
+Ontology membership has one canonical representation: the `:Ontology` node uses
+`:CONTAINS` for both `:NodeType` and `:RelationshipType` members. Keep write,
+read-back, and verification queries on that shared relationship so the ontology
+compiler sees the same graph the user sees in Bloom/Explore.
 
 Showcase moment: when the user pushes back on entity-vs-property, explain the tradeoff. "If we make jurisdiction an entity, we can ask 'show all contracts in this jurisdiction grouped by year' easily. As a property, that's still possible but a bit slower. For 50 contracts it doesn't matter; for 50,000 it might."
 
@@ -261,14 +274,14 @@ This is a **mandatory user checkpoint**. The user has to see what you've built, 
 Before pointing the user at Bloom, tell them what you just built — in their words, not in graph jargon. Read the ontology back via `ontology_read_neo4j_cypher`:
 
 ```cypher
-MATCH (o:Ontology {name: "<name>"})-[:HAS_NODE_TYPE]->(nt:NodeType)
+MATCH (o:Ontology {name: "<name>"})-[:CONTAINS]->(nt:NodeType)
 OPTIONAL MATCH (nt)-[:HAS_PROPERTY]->(pd:PropertyDef)
 RETURN nt.name AS entity, nt.description AS description, collect(pd.name) AS properties
 ORDER BY entity
 ```
 
 ```cypher
-MATCH (o:Ontology {name: "<name>"})-[:HAS_RELATIONSHIP_TYPE]->(rt:RelationshipType)
+MATCH (o:Ontology {name: "<name>"})-[:CONTAINS]->(rt:RelationshipType)
 MATCH (rt)-[:FROM]->(src:NodeType), (rt)-[:TO]->(dst:NodeType)
 RETURN rt.name AS relationship, src.name AS source, dst.name AS target, rt.description AS description
 ORDER BY relationship
@@ -457,6 +470,35 @@ Then run the query, synthesize the answer (same pattern as 8.1), and end with:
 > "Now you try — ask me anything about your documents. I can do simple lookups, fuzzy 'about X' questions, exact phrase matches, or multi-hop questions across multiple kinds of entities."
 
 Keep going until they're done. If a question can't be answered with the current ontology, say so honestly and propose extending it (see `references/common-pitfalls.md`).
+
+Before finalization, answer any confirmed competency questions from Phase 2 that
+were not covered by the showcase or follow-up conversation. Record the method,
+actual query, answer, quality, and improvement for every confirmed question.
+
+---
+
+## Phase 9 — Validate the completion report
+
+Assemble the final Markdown report using the `chatbot_report` structure: `Source
+Data`, `Use Case`, `Graph Data Model`, `Target Questions and Answers`, `Extraction
+Quality`, `Gaps and Limitations`, and `Recommended Next Steps`. Include one `### QN:
+<question>` record for every confirmed competency question with `Method`, `Query`,
+`Answer`, `Quality`, and `Improvement` fields.
+
+Call:
+
+```
+validate_workflow_report(
+    report_markdown="<complete Markdown report>",
+    report_type="chatbot_report",
+    expected_records=<number of confirmed competency questions>,
+    pdf_data_present=true,
+)
+```
+
+If `valid` is false, correct every returned error and call the validator again. Do
+not claim completion until it returns `valid: true`. Then present the validated
+report to the user.
 
 ---
 

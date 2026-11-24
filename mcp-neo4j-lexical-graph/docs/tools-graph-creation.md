@@ -42,7 +42,7 @@ Returns immediately with a `job_id`. Use `check_processing_status(job_id)` to mo
   "job_id": "job_abc123",
   "status": "queued",
   "files_total": 3,
-  "total_pages": 42,
+  "sourcePageCount": 42,
   "estimated_minutes": 2.1,
   "message": "Job queued. Use check_processing_status('job_abc123') to monitor."
 }
@@ -52,7 +52,7 @@ Returns immediately with a `job_id`. Use `check_processing_status(job_id)` to mo
 
 ## check_processing_status
 
-Check the status of background lexical graph processing jobs. Returns progress info including elapsed time, estimated remaining time, files completed/remaining, pages processed, and elements extracted.
+Check the status of background lexical graph processing jobs. Source-page fields count physical pages in the input PDF; they do not count Neo4j `:Page` nodes.
 
 ### Parameters
 
@@ -69,8 +69,8 @@ Check the status of background lexical graph processing jobs. Returns progress i
   "elapsed_seconds": 45,
   "files_completed": 1,
   "files_total": 3,
-  "pages_processed": 12,
-  "total_pages_expected": 42,
+  "sourcePagesProcessed": 12,
+  "sourcePagesExpected": 42,
   "estimated_remaining_seconds": 90
 }
 ```

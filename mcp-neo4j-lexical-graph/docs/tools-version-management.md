@@ -2,7 +2,7 @@
 
 ## list_documents
 
-List all documents in the graph, grouped by sourceId with version info. Shows parse mode, node counts, embedding status, and active flag for each version.
+List all documents in the graph, grouped by sourceId with version info. `sourcePageCount` is the number of physical pages in the input PDF. `pageNodeCount` is the number of materialized Neo4j `:Page` nodes. PyMuPDF currently creates chunks directly, so a valid two-page PyMuPDF document reports `sourcePageCount: 2` and `pageNodeCount: 0`.
 
 ### Parameters
 
@@ -24,7 +24,8 @@ None.
           "version": 1,
           "active": false,
           "parseMode": "pymupdf",
-          "pages": 13,
+          "sourcePageCount": 13,
+          "pageNodeCount": 0,
           "elements": 0,
           "sections": 0,
           "chunks": 42,
@@ -36,7 +37,8 @@ None.
           "version": 2,
           "active": true,
           "parseMode": "docling",
-          "pages": 13,
+          "sourcePageCount": 13,
+          "pageNodeCount": 13,
           "elements": 142,
           "sections": 18,
           "chunks": 47,

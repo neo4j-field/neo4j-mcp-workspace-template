@@ -5,10 +5,12 @@ description = "Unified Neo4j MCP proxy — single entry point for all workspace 
 requires-python = ">=3.10"
 dependencies = [
     "fastmcp>=2.13.1",
+    "pyyaml>=6.0,<7.0",
 ]
 
 [project.scripts]
 mcp-neo4j-proxy = "mcp_neo4j_proxy:main"
+neo4j-validate-report = "mcp_neo4j_proxy.report_validator:main"
 
 [build-system]
 requires = ["hatchling"]

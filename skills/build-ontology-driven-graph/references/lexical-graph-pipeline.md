@@ -50,7 +50,11 @@ DETACH DELETE n
 ### Step 2 — re-parse with page_image
 
 ```
-create_lexical_graph(directory_path="<same folder>", parse_mode="page_image")
+create_lexical_graph(
+    path="<same folder>",
+    output_dir="<same folder>/.neo4j-mcp-output",
+    parse_mode="page_image",
+)
 ```
 
 Wait for it via `check_processing_status()`.
@@ -72,7 +76,7 @@ embed_chunks()
 ```cypher
 // via documents_read_neo4j_cypher
 MATCH (c:Chunk)
-RETURN count(c) AS total, count(c.embedding) AS embedded
+RETURN count(c) AS total, count(c.text_embedding) AS embedded
 ```
 
 Continue when `embedded == total`.
@@ -93,4 +97,7 @@ Optional. The function generates text descriptions for image and table nodes att
 
 ## When something is still wrong after page_image fallback
 
-If chunks are still bad after page_image + descriptions, the PDFs may need a parser the skill doesn't currently support (`docling` or `vlm_blocks`). Tell the user honestly, and offer to either (a) try those modes manually with `create_lexical_graph(parse_mode="docling")` after wiping again, or (b) ask the user for a different document set.
+If chunks are still bad after page_image + descriptions, the PDFs may need Docling.
+Tell the user honestly, and offer to either (a) repeat the full Step 2 call after
+wiping again, changing its mode to `parse_mode="docling"`, or (b) ask the user for
+a different document set.

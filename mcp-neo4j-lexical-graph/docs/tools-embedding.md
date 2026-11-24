@@ -14,7 +14,7 @@ The tool composes the embedding input text depending on the node type:
 | Image/Table/Page with `textDescription` | `documentName + sectionContext + textDescription` |
 | Image/Table/Page without `textDescription` | **Skipped** |
 
-Uses Neo4j native `VECTOR(list, dims, FLOAT32)` type for storage. Creates a vector index with `documentName` prefilter for efficient filtered search (Cypher 25 syntax).
+Uses Neo4j native `VECTOR(list, dims, FLOAT32)` type for storage. Attempts a vector index with metadata prefilters, then falls back to a plain vector index when the server rejects prefilter syntax. The result reports the actual index mode and `ONLINE` or `POPULATING` state; failure to create or find the index is an error.
 
 ### Parameters
 

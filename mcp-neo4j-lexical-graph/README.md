@@ -59,7 +59,7 @@ Add to your `.cursor/mcp.json`:
         "NEO4J_PASSWORD": "your-password",
         "NEO4J_DATABASE": "neo4j",
         "EMBEDDING_MODEL": "text-embedding-3-small",
-        "EXTRACTION_MODEL": "gpt-5.4-mini",
+        "EXTRACTION_MODEL": "gpt-6-luna",
         "OPENAI_API_KEY": "sk-..."
       }
     }
@@ -107,6 +107,21 @@ Tools must be called in a specific order — which tools to call depends on the 
 | `clean_inactive` | Delete inactive document versions and chunk sets |
 | `delete_document` | Remove a document version with cascade (pages, elements, sections, chunks) |
 
+### Page-count contract
+
+All public responses distinguish the physical PDF page count from the graph shape:
+
+- `sourcePageCount` counts physical pages in the input PDF.
+- `pageNodeCount` counts materialized Neo4j `:Page` nodes.
+- Job status uses `sourcePagesExpected`, `sourcePagesProcessed`, and
+  `currentFileSourcePageCount` because processing progress refers to input pages.
+
+PyMuPDF currently writes chunks directly and intentionally creates no `:Page` nodes,
+so a valid two-page PyMuPDF document reports `sourcePageCount: 2` and
+`pageNodeCount: 0`. Docling and page-image currently materialize one `:Page` node per
+source page. Unifying every parser behind `ParsedDocument` and one writer remains the
+separate deferred `DOC-001` architecture task.
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |
@@ -116,7 +131,7 @@ Tools must be called in a specific order — which tools to call depends on the 
 | `NEO4J_PASSWORD` | Yes | - | Neo4j password |
 | `NEO4J_DATABASE` | No | `neo4j` | Database name |
 | `EMBEDDING_MODEL` | No | `text-embedding-3-small` | Default embedding model ([LiteLLM providers](https://docs.litellm.ai/docs/embedding/supported_embedding)) |
-| `EXTRACTION_MODEL` | No | `gpt-5.4-mini` | LLM/VLM for section hierarchy and description generation |
+| `EXTRACTION_MODEL` | No | `gpt-6-luna` | LLM/VLM for section hierarchy and description generation |
 | `OPENAI_API_KEY` | Depends | - | Required when using OpenAI models for embedding or extraction. Other providers use their own key (e.g. `ANTHROPIC_API_KEY`, `AZURE_API_KEY`). See [LiteLLM docs](https://docs.litellm.ai/docs/providers) |
 
 ## Requirements

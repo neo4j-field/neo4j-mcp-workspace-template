@@ -1,0 +1,50 @@
+[
+  {
+    "id": "lex001-pymupdf-v1",
+    "sourceId": "lex001-pymupdf",
+    "version": 1,
+    "active": true,
+    "name": "two-pages-pymupdf.pdf",
+    "source": "/fixtures/two-pages-pymupdf.pdf",
+    "parseMode": "pymupdf",
+    "sourcePageCount": 2,
+    "pageNodeCount": 0,
+    "elementCount": 0,
+    "sectionCount": 0,
+    "totalChunkCount": 1,
+    "hasEmbeddings": false,
+    "createdAt": "2026-09-10T00:00:00Z"
+  },
+  {
+    "id": "lex001-docling-v1",
+    "sourceId": "lex001-docling",
+    "version": 1,
+    "active": true,
+    "name": "two-pages-docling.pdf",
+    "source": "/fixtures/two-pages-docling.pdf",
+    "parseMode": "docling",
+    "sourcePageCount": 2,
+    "pageNodeCount": 2,
+    "elementCount": 4,
+    "sectionCount": 1,
+    "totalChunkCount": 2,
+    "hasEmbeddings": false,
+    "createdAt": "2026-09-10T00:00:00Z"
+  },
+  {
+    "id": "lex001-page-image-v1",
+    "sourceId": "lex001-page-image",
+    "version": 1,
+    "active": true,
+    "name": "two-pages-page-image.pdf",
+    "source": "/fixtures/two-pages-page-image.pdf",
+    "parseMode": "page_image",
+    "sourcePageCount": 2,
+    "pageNodeCount": 2,
+    "elementCount": 0,
+    "sectionCount": 0,
+    "totalChunkCount": 0,
+    "hasEmbeddings": false,
+    "createdAt": "2026-09-10T00:00:00Z"
+  }
+]

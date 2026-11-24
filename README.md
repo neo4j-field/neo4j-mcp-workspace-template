@@ -65,7 +65,7 @@ If you use **Claude Desktop** (not one of the 7 coding tools above), install the
    - **Documents DB** — URI, username, password, database name (e.g. `neo4j`)
    - **Ontology DB** — URI, username, password, database name (e.g. `neo4j` on Aura, `ontology` on Desktop). Leave URI/username/password blank if using the same Neo4j instance as Documents DB.
    - **OpenAI API key** — for embeddings; also used for extraction if your extraction model is OpenAI
-   - **Extraction model** — defaults to `openai/gpt-5.4-mini`; change to any [LiteLLM-compatible](https://docs.litellm.ai/docs/providers) model
+   - **Extraction model** — defaults to `openai/gpt-6-luna`; change to any [LiteLLM-compatible](https://docs.litellm.ai/docs/providers) model
 4. Click **Install** — all MCP servers start automatically
 
 ### What makes it different
@@ -219,7 +219,7 @@ Both `EMBEDDING_MODEL` and `EXTRACTION_MODEL` accept any [LiteLLM-compatible](ht
 
 ```env
 EMBEDDING_MODEL=text-embedding-3-small
-EXTRACTION_MODEL=gpt-5.4-mini
+EXTRACTION_MODEL=gpt-6-luna
 ```
 
 Fast, high quality, requires an OpenAI API key.
@@ -437,4 +437,3 @@ neo4j-mcp-workspace-template/
         ├── setup-workspace/        # /setup-workspace validation skill
         └── dev/evaluate-pipeline/  # /dev:evaluate-pipeline skill
 ```
-

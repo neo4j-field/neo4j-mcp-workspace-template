@@ -175,7 +175,7 @@ async def fetch_chunks_needing_descriptions(
 
 async def generate_description_for_chunk(
     chunk_info: dict[str, Any],
-    model: str = "gpt-5.4-mini",
+    model: str = "gpt-6-luna",
     max_retries: int = 3,
 ) -> str | None:
     """Generate a text description for a single image/table chunk using VLM.
@@ -248,7 +248,10 @@ async def generate_description_for_chunk(
     }
 
     model_lower = model.lower()
-    if "gpt-5" in model_lower:
+    if "gpt-6" in model_lower:
+        api_params["reasoning_effort"] = "low"
+        api_params["allowed_openai_params"] = ["reasoning_effort"]
+    elif "gpt-5" in model_lower:
         # "low" is accepted across the gpt-5 family (incl. gpt-5.4, which
         # dropped "minimal" from its allowed reasoning_effort values).
         api_params["reasoning_effort"] = "low"
@@ -294,7 +297,7 @@ async def generate_descriptions_batch(
     driver: AsyncDriver,
     database: str,
     document_id: str,
-    model: str = "gpt-5.4-mini",
+    model: str = "gpt-6-luna",
     parallel: int = 5,
 ) -> dict[str, Any]:
     """Generate descriptions for all visual nodes in a document.

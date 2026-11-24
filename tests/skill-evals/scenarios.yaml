@@ -1,0 +1,60 @@
+version: 1
+
+scenarios:
+  - id: build_mixed_sources_chatbot
+    workflow: develop-neo4j-graph
+    kind: happy_path
+    prompt: Build a chatbot graph from the supplied CSV and PDF fixtures.
+    required_outcomes:
+      - graph_invariants_pass
+      - extraction_provenance_present
+      - detailed_chatbot_report_present
+
+  - id: build_visual_presentation_pdf
+    workflow: develop-neo4j-graph
+    kind: parser_selection
+    prompt: Build a graph from this visual presentation exported as a PDF and use page-image parsing.
+    required_outcomes:
+      - parser_is_page_image
+      - page_images_are_preserved
+      - derived_content_has_page_provenance
+
+  - id: improve_existing_graph
+    workflow: assess-and-improve-neo4j-graph
+    kind: quality_loop
+    status: deferred_until_after_stabilization
+    prompt: Assess this existing graph, propose quality improvements, and wait for approval before changing it.
+    required_trace:
+      - baseline_before_proposal
+      - detailed_quality_report_before_write
+      - approval_before_schema_or_rebuild_write
+      - same_checks_before_and_after
+    required_outcomes:
+      - versioned_configuration
+      - stale_generated_data_absent
+      - before_after_report_present
+
+  - id: report_detail_enforcement
+    workflow: develop-neo4j-graph
+    kind: incomplete_output
+    prompt: Build the graph and provide the final report.
+    injected_behavior: omit_required_report_detail_on_first_finalize
+    required_outcomes:
+      - first_finalize_rejected
+      - missing_sections_identified
+      - corrected_report_present
+
+  - id: unsupported_source
+    workflow: develop-neo4j-graph
+    kind: recovery
+    prompt: Build a graph from an unsupported source fixture.
+    required_outcomes:
+      - no_partial_graph_activated
+      - actionable_failure_reported
+
+  - id: unrelated_cypher_question
+    workflow: none
+    kind: non_activation
+    prompt: Explain what an OPTIONAL MATCH does in Cypher.
+    prohibited_outcomes:
+      - graph_development_skill_activated

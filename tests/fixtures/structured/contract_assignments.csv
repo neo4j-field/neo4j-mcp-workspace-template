@@ -1,0 +1,3 @@
+testRunId,sourceId,targetId,role
+contract-test-20260910,p-001,pr-001,architect
+contract-test-20260910,p-002,pr-001,reviewer

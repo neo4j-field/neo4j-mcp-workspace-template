@@ -86,7 +86,10 @@ Save the final model JSON to `outputs/data_models/<topic>_data_model.json`.
 ### CSV data — `neo4j-ingest`
 
 Reference [HANDLE_STRUCTURED_DATA.md](./references/HANDLE_STRUCTURED_DATA.md) for ingestion details.
-Always use absolute paths. Use `ingest_csv_into_neo4j`.
+Always use absolute paths. Generate executable queries with
+`compile_node_ingest_query` and `compile_relationship_ingest_query` from
+`neo4j-ingest`, then execute them with `ingest_csv_into_neo4j`. Do not use the
+pinned data-modeling server's ingest-query drafts directly.
 
 ### PDF data — `neo4j-lexical-graph`
 
@@ -138,8 +141,8 @@ If orphans are found, check for cross-file ID mismatches before proceeding.
 Use `convert_schema` from `neo4j-entity-graph` — **not** `export_to_pydantic_models` from the data-modeling server.
 
 - Input: the entity extraction sub-model (not the full unified model)
-- Set `output_path` to `outputs/schemas/<topic>_schema.json`
-- Output: `<topic>_schema.json` (extraction config) + `<topic>_schema.json.py` (Pydantic models)
+- Set `output_path` to `outputs/schemas/<topic>_schema.py`
+- Output: `<topic>_schema.py` (Pydantic models used directly by extraction)
 
 Review the Pydantic `.py` file. For each node's key property, verify or add a normalizing validator:
 
@@ -158,7 +161,7 @@ This prevents duplicate nodes from minor text variations (e.g. `"Aspirin"` vs `"
 
 Use `extract_entities` from `neo4j-entity-graph`:
 
-- Pass the schema JSON path from Step 5
+- Pass the Pydantic `.py` schema path from Step 5
 - Extraction is async — poll with `check_extraction_status` until complete
 - Report progress to the user: chunks processed, entities found so far
 
@@ -198,6 +201,22 @@ Answer each confirmed target question using `neo4j-graphrag` tools (vector searc
 **[ANALYTICAL mode]** → Load [ANALYTICAL_MODE.md](./references/ANALYTICAL_MODE.md):
 Generate Cypher queries per use case in YAML format, validate them against the graph, then generate the analytical report saved to `outputs/reports/<topic>_report.md`.
 
+### Mandatory report validation
+
+Before claiming completion, validate the saved report with the number of confirmed
+target questions or use cases:
+
+```bash
+uv run --project mcp-neo4j-proxy neo4j-validate-report REPORT_PATH \
+  --type REPORT_TYPE --expected-records CONFIRMED_COUNT [--pdf-data-present]
+```
+
+Use `chatbot_report` or `analytical_report` for `REPORT_TYPE`. Add
+`--pdf-data-present` when PDFs were ingested. Exit code `0` means the report is
+complete. On exit code `1`, correct every reported error and rerun the validator;
+do not claim completion until it passes. Exit code `2` means the report or contract
+could not be read and must be fixed before retrying.
+
 ---
 
 ## MCP Server Quick Reference
@@ -205,7 +224,7 @@ Generate Cypher queries per use case in YAML format, validate them against the g
 | Server | Steps | Key Tools |
 |--------|-------|-----------|
 | `neo4j-data-modeling` | 3 | `list_example_data_models`, `get_example_data_model`, `get_mermaid_config_str`, `validate_data_model` |
-| `neo4j-ingest` | 4 | `ingest_csv_into_neo4j` |
+| `neo4j-ingest` | 4 | `compile_node_ingest_query`, `compile_relationship_ingest_query`, `ingest_csv_into_neo4j` |
 | `neo4j-lexical-graph` | 4 | `create_lexical_graph`, `chunk_lexical_graph`, `list_documents`, `generate_chunk_descriptions`, `embed_chunks`, `check_processing_status`, `verify_lexical_graph` (spot-check, single doc only), `assign_section_hierarchy` (optional) |
 | `neo4j-entity-graph` | 5–6 | `convert_schema`, `extract_entities`, `check_extraction_status` |
 | `neo4j-graphrag` | 4.5–8 | `read_neo4j_cypher`, `write_neo4j_cypher`, `get_neo4j_schema_and_indexes`, `vector_search`, `fulltext_search`, `search_cypher_query`, `read_node_image` |

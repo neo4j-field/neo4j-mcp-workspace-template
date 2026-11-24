@@ -1,0 +1,3 @@
+test_run_id,person_id,project_id,assignment_role
+ingest-001-integration-20260910,p-101,pr-101,architect
+ingest-001-integration-20260910,p-102,pr-101,reviewer

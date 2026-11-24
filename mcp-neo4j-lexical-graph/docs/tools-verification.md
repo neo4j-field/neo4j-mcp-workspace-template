@@ -8,7 +8,7 @@ Run structural checks and content reconstruction on a document's graph. Produces
 
 - **Orphan nodes**: Nodes not connected to their expected parent
 - **Broken NEXT chains**: Missing or incorrect `NEXT_ELEMENT` / `NEXT_PAGE` / `NEXT_CHUNK` links
-- **Statistics**: Node counts by type, element type distribution, section counts, chunk token stats (min/max/avg/median)
+- **Statistics**: Physical source-page count, materialized `:Page`-node count, element type distribution, section counts, and chunk token stats (min/max/avg/median)
 - **Content reconstruction**: Rebuilds the document as Markdown from elements (reading order via `NEXT_ELEMENT`) or from chunks (reading order via `NEXT_CHUNK`)
 
 ### Output Files
@@ -34,7 +34,8 @@ The tool writes to `output_dir`:
   "status": "success",
   "document_id": "doc_v1",
   "statistics": {
-    "pages": 13,
+    "sourcePageCount": 13,
+    "pageNodeCount": 13,
     "elements": 142,
     "sections": 18,
     "chunks": 47,

@@ -14,6 +14,11 @@ from fastmcp.tools.tool_transform import ArgTransform
 
 import pandas as pd
 
+from .query_compiler import (
+    compile_node_ingest_query as _compile_node_ingest_query,
+    compile_relationship_ingest_query as _compile_relationship_ingest_query,
+)
+
 # Load environment variables from workspace root .env file
 _workspace_root = Path(__file__).resolve().parent.parent.parent.parent
 load_dotenv(_workspace_root / ".env")
@@ -23,6 +28,28 @@ driver = AsyncGraphDatabase.driver(os.getenv("NEO4J_URI"), auth=(os.getenv("NEO4
 cypher_mcp = create_mcp_server(driver, os.getenv("NEO4J_DATABASE", "neo4j"))
 
 ingest_mcp = FastMCP(name="ingest_mcp")
+
+
+@ingest_mcp.tool
+def compile_node_ingest_query(node: dict) -> str:
+    """Compile a node model into safe executable CSV-ingest Cypher.
+
+    Declared ``source.column_name`` values are used for CSV record access and
+    labels, property names, and source columns must be safe identifiers.
+    """
+
+    return _compile_node_ingest_query(node)
+
+
+@ingest_mcp.tool
+def compile_relationship_ingest_query(data_model: dict, relationship: dict) -> str:
+    """Compile a relationship model into safe executable CSV-ingest Cypher.
+
+    Endpoint keys use their declared source columns.  The relationship is always
+    bound and relationship properties are written only to that bound variable.
+    """
+
+    return _compile_relationship_ingest_query(data_model, relationship)
 
 
 async def ingest_csv_into_neo4j(query: str, params: dict[str, str]) -> list[ToolResult]:

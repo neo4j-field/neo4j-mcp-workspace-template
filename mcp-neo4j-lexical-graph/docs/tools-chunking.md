@@ -10,13 +10,13 @@ Only applies to documents created in `docling` mode. Documents created in `pymup
 
 | Name | Required | Default | Description |
 |------|----------|---------|-------------|
-| `document_id` | No | `null` | Document version id to chunk. If `null`, chunks all active documents without chunks |
+| `document_id` | No | `null` | Document version id to chunk. If `null`, chunks active eligible documents without chunks, or rebuilds all of them when `clear_existing_chunks=true` |
 | `strategy` | No | `"token_window"` | Chunking strategy (see below) |
 | `chunk_size` | No | `500` | Target tokens per chunk |
 | `chunk_overlap` | No | `50` | Token overlap (`token_window` strategy only) |
 | `include_tables_as_chunks` | No | `true` | Create separate chunks for table elements |
 | `include_images_as_chunks` | No | `true` | Create separate chunks for image/chart elements |
-| `clear_existing_chunks` | No | `false` | If `true`, delete ALL existing chunk sets. If `false`, keep previous sets as inactive |
+| `clear_existing_chunks` | No | `false` | If `true`, delete existing chunk sets for every selected document before rebuilding. With no `document_id`, selects every active eligible document. If `false`, keep previous sets as inactive |
 | `prepend_section_heading` | No | `true` | Add section title to chunk text |
 
 ### Strategies

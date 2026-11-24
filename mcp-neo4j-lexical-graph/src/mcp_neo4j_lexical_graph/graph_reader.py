@@ -33,10 +33,10 @@ async def list_all_documents(
         OPTIONAL MATCH (d)-[:HAS_PAGE]->(p:Page)
         OPTIONAL MATCH (d)-[:HAS_SECTION]->(s:Section)
         WITH d,
-             count(DISTINCT p) AS pageCount,
+             count(DISTINCT p) AS pageNodeCount,
              count(DISTINCT s) AS sectionCount
         OPTIONAL MATCH (c:Chunk)-[:PART_OF]->(d)
-        WITH d, pageCount, sectionCount,
+        WITH d, pageNodeCount, sectionCount,
              count(DISTINCT c) AS totalChunkCount,
              collect(DISTINCT {
                  chunkSetVersion: c.chunkSetVersion,
@@ -45,7 +45,7 @@ async def list_all_documents(
              }) AS chunkSets
         OPTIONAL MATCH (d)<-[:PART_OF]-(ce:Chunk)
         WHERE ce.text_embedding IS NOT NULL
-        WITH d, pageCount, sectionCount, totalChunkCount, chunkSets,
+        WITH d, pageNodeCount, sectionCount, totalChunkCount, chunkSets,
              count(ce) AS embeddedCount
         RETURN d.id AS id,
                d.sourceId AS sourceId,
@@ -55,7 +55,8 @@ async def list_all_documents(
                d.source AS source,
                d.parseMode AS parseMode,
                d.totalElements AS elementCount,
-               pageCount,
+               coalesce(d.totalPages, pageNodeCount) AS sourcePageCount,
+               pageNodeCount,
                sectionCount,
                totalChunkCount,
                embeddedCount > 0 AS hasEmbeddings,

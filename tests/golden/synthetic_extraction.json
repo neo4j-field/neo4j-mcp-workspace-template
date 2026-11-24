@@ -1,0 +1,31 @@
+{
+  "name": "synthetic-maintenance-v1",
+  "review": "Hand-authored synthetic source and expected graph; no customer data or model-generated labels.",
+  "cases": [
+    {
+      "id": "maintenance-1",
+      "text": "Technician Maya Chen inspected pump PX-17 at Cedar Works on 12 March 2026. She replaced its inlet seal. The pump returned to service the same day.",
+      "entities": [
+        {"label": "Technician", "key": "maya chen"},
+        {"label": "Equipment", "key": "px-17"},
+        {"label": "Facility", "key": "cedar works"}
+      ],
+      "relationships": [
+        {"type": "INSPECTED", "source": ["Technician", "maya chen"], "target": ["Equipment", "px-17"]},
+        {"type": "LOCATED_AT", "source": ["Equipment", "px-17"], "target": ["Facility", "cedar works"]}
+      ]
+    },
+    {
+      "id": "maintenance-2",
+      "text": "Pump PX-18 is scheduled for inspection next week. No inspection or repair has been completed for PX-18 in this note.",
+      "entities": [{"label": "Equipment", "key": "px-18"}],
+      "relationships": []
+    },
+    {
+      "id": "maintenance-3",
+      "text": "An unlabeled spare seal was counted in storage. The note does not identify a technician, pump, or facility.",
+      "entities": [],
+      "relationships": []
+    }
+  ]
+}

@@ -132,12 +132,23 @@ class ExtractedRelationship(BaseModel):
     )
 
 
+class ChunkExtractionOutcome(str, Enum):
+    """Observable outcome of one source-unit extraction attempt."""
+
+    SUCCESS = "success"
+    EMPTY = "empty"
+    FAILED = "failed"
+
+
 class ChunkExtractionResult(BaseModel):
     """Extraction result for a single chunk."""
 
     chunk_id: str = Field(..., description="ID of the source chunk")
     entities: list[ExtractedEntity] = Field(default_factory=list)
     relationships: list[ExtractedRelationship] = Field(default_factory=list)
+    outcome: ChunkExtractionOutcome = Field(default=ChunkExtractionOutcome.SUCCESS)
+    attempts: int = Field(default=1, ge=0)
+    error: Optional[str] = None
 
 
 # ============================================

@@ -35,6 +35,7 @@ from .base_extractor import (
 )
 from .job_manager import ExtractionJobInfo, JobManager, JobStatus
 from .models import (
+    ChunkExtractionOutcome,
     ChunkExtractionResult,
     ChunkType,
     ClassifiedChunk,
@@ -94,17 +95,23 @@ def create_mcp_server(
     async def query_and_classify_chunks(
         source_label: str,
         force: bool,
-    ) -> list[ClassifiedChunk]:
+    ) -> tuple[list[ClassifiedChunk], int]:
         """Query Neo4j for source nodes and classify them as text or VLM."""
 
-        # Query fetches all relevant properties for classification
+        # Count all content-eligible sources separately from the current selection.
+        # Keep the skip filter in Neo4j so already-processed images are not transferred.
+        count_query = f"""
+            MATCH (n:{source_label})
+            WHERE n.text IS NOT NULL OR n.imageBase64 IS NOT NULL
+            RETURN count(n) AS eligible_sources
+        """
         force_filter = ""
         if not force:
             force_filter = "AND NOT (n)<-[:EXTRACTED_FROM]-()"
 
         query = f"""
             MATCH (n:{source_label})
-            WHERE n.text IS NOT NULL OR n.imageBase64 IS NOT NULL
+            WHERE (n.text IS NOT NULL OR n.imageBase64 IS NOT NULL)
             {force_filter}
             RETURN
                 n.id AS id,
@@ -119,8 +126,11 @@ def create_mcp_server(
         """
 
         async with neo4j_driver.session(database=database) as session:
+            count_result = await session.run(count_query)
+            count_record = await count_result.single()
             result = await session.run(query)
             records = await result.data()
+        eligible_sources = count_record["eligible_sources"] if count_record else 0
 
         chunks: list[ClassifiedChunk] = []
         for r in records:
@@ -152,7 +162,7 @@ def create_mcp_server(
                 )
             )
 
-        return chunks
+        return chunks, eligible_sources
 
     # ========================================
     # Neo4j write: batch results
@@ -163,6 +173,9 @@ def create_mcp_server(
         schema: ExtractionSchema,
         source_label: str,
         metadata: ExtractionMetadata,
+        *,
+        write_entities: bool = True,
+        write_relationships: bool = True,
     ) -> dict[str, int]:
         """Write extraction results to Neo4j with EXTRACTED_FROM provenance."""
         stats = {
@@ -221,47 +234,71 @@ def create_mcp_server(
         }
 
         async with neo4j_driver.session(database=database) as session:
-            for label, entities in entities_by_label.items():
-                if not entities:
-                    continue
-                entity_schema = schema.get_entity_schema(label)
-                if not entity_schema:
-                    continue
+            if write_entities:
+                for label, entities in entities_by_label.items():
+                    if not entities:
+                        continue
+                    entity_schema = schema.get_entity_schema(label)
+                    if not entity_schema:
+                        continue
 
-                query = f"""
-                    UNWIND $entities AS entity
-                    MERGE (e:{label} {{{entity_schema.key_property}: entity.key_value}})
-                    SET e += entity.properties
-                    WITH e, entity
-                    MATCH (c:{source_label} {{id: entity.chunk_id}})
-                    MERGE (e)-[r:EXTRACTED_FROM]->(c)
-                    SET r += $meta
-                    RETURN count(DISTINCT e) as entities_created, count(*) as rels_created
-                """
+                    query = f"""
+                        UNWIND $entities AS entity
+                        MERGE (e:{label} {{{entity_schema.key_property}: entity.key_value}})
+                        SET e += entity.properties
+                        WITH e, entity
+                        MATCH (c:{source_label} {{id: entity.chunk_id}})
+                        MERGE (e)-[r:EXTRACTED_FROM]->(c)
+                        SET r += $meta
+                        RETURN count(DISTINCT e) as entities_created, count(*) as rels_created
+                    """
 
-                result = await session.run(query, entities=entities, meta=meta_props)
-                record = await result.single()
-                if record:
-                    stats["entities_created"] += record["entities_created"]
-                    stats["extracted_from_created"] += record["rels_created"]
+                    result = await session.run(query, entities=entities, meta=meta_props)
+                    record = await result.single()
+                    if record:
+                        stats["entities_created"] += record["entities_created"]
+                        stats["extracted_from_created"] += record["rels_created"]
 
-            for key, rels in rels_by_type.items():
-                if not rels:
-                    continue
-                first = rels[0]
-                query = f"""
-                    UNWIND $relationships AS rel
-                    MATCH (source:{first['source_label']} {{{first['source_key_property']}: rel.source_key_value}})
-                    MATCH (target:{first['target_label']} {{{first['target_key_property']}: rel.target_key_value}})
-                    MERGE (source)-[r:{first['type']}]->(target)
-                    SET r += rel.properties
-                    RETURN count(r) as created
-                """
-                result = await session.run(query, relationships=rels)
-                record = await result.single()
-                stats["relationships_created"] += record["created"] if record else 0
+            if write_relationships:
+                for key, rels in rels_by_type.items():
+                    if not rels:
+                        continue
+                    first = rels[0]
+                    query = f"""
+                        UNWIND $relationships AS rel
+                        MATCH (source:{first['source_label']} {{{first['source_key_property']}: rel.source_key_value}})
+                        MATCH (target:{first['target_label']} {{{first['target_key_property']}: rel.target_key_value}})
+                        MERGE (source)-[r:{first['type']}]->(target)
+                        SET r += rel.properties
+                        RETURN count(r) as created
+                    """
+                    result = await session.run(query, relationships=rels)
+                    record = await result.single()
+                    stats["relationships_created"] += record["created"] if record else 0
 
         return stats
+
+    async def count_persisted_sources(
+        source_ids: list[str],
+        source_label: str,
+        metadata: ExtractionMetadata,
+    ) -> int:
+        """Count source units linked by this exact extraction run."""
+        if not source_ids:
+            return 0
+        query = f"""
+            MATCH (c:{source_label})<-[r:EXTRACTED_FROM]-()
+            WHERE c.id IN $source_ids AND r.extractedAt = $extracted_at
+            RETURN count(DISTINCT c) AS sources_persisted
+        """
+        async with neo4j_driver.session(database=database) as session:
+            result = await session.run(
+                query,
+                source_ids=source_ids,
+                extracted_at=metadata.timestamp,
+            )
+            record = await result.single()
+        return record["sources_persisted"] if record else 0
 
     # ========================================
     # Background extraction job
@@ -304,7 +341,11 @@ def create_mcp_server(
                 buffer = []
                 job_manager.update_status(job.id, JobStatus.WRITING)
                 write_stats = await write_batch_to_neo4j(
-                    to_write, schema, source_label, metadata
+                    to_write,
+                    schema,
+                    source_label,
+                    metadata,
+                    write_relationships=False,
                 )
                 job_manager.update_progress(
                     job.id,
@@ -324,11 +365,31 @@ def create_mcp_server(
 
             async def extract_text_chunk(chunk: ClassifiedChunk) -> ChunkExtractionResult:
                 async with text_semaphore:
-                    return await text_extractor.extract_chunk(chunk, schema, output_model)
+                    job_manager.update_progress(
+                        job.id, sources_attempted=job.sources_attempted + 1
+                    )
+                    try:
+                        return await text_extractor.extract_chunk(chunk, schema, output_model)
+                    except Exception as exc:
+                        return ChunkExtractionResult(
+                            chunk_id=chunk.id,
+                            outcome=ChunkExtractionOutcome.FAILED,
+                            error=f"Unexpected text extraction failure: {exc}",
+                        )
 
             async def extract_vlm_chunk(chunk: ClassifiedChunk) -> ChunkExtractionResult:
                 async with vlm_semaphore:
-                    return await vlm_extractor.extract_chunk(chunk, schema, output_model)
+                    job_manager.update_progress(
+                        job.id, sources_attempted=job.sources_attempted + 1
+                    )
+                    try:
+                        return await vlm_extractor.extract_chunk(chunk, schema, output_model)
+                    except Exception as exc:
+                        return ChunkExtractionResult(
+                            chunk_id=chunk.id,
+                            outcome=ChunkExtractionOutcome.FAILED,
+                            error=f"Unexpected VLM extraction failure: {exc}",
+                        )
 
             # Create all tasks
             tasks: list[asyncio.Task] = []
@@ -339,20 +400,42 @@ def create_mcp_server(
 
             for coro in asyncio.as_completed(tasks):
                 result = await coro
-                all_results.append(result)
-                buffer.append(result)
-
-                job_manager.update_progress(
-                    job.id,
-                    chunks_completed=job.chunks_completed + 1,
-                    entities_extracted=job.entities_extracted + len(result.entities),
-                    relationships_extracted=job.relationships_extracted
-                    + len(result.relationships),
-                )
+                if result.outcome == ChunkExtractionOutcome.FAILED:
+                    failed_ids = [*job.failed_source_ids, result.chunk_id]
+                    failure_details = {
+                        **job.failure_details,
+                        result.chunk_id: result.error or "unknown extraction failure",
+                    }
+                    job_manager.update_progress(
+                        job.id,
+                        chunks_failed=job.chunks_failed + 1,
+                        sources_failed=job.sources_failed + 1,
+                        failed_source_ids=failed_ids,
+                        failure_details=failure_details,
+                    )
+                else:
+                    all_results.append(result)
+                    if result.outcome == ChunkExtractionOutcome.SUCCESS:
+                        buffer.append(result)
+                    job_manager.update_progress(
+                        job.id,
+                        chunks_completed=job.chunks_completed + 1,
+                        sources_succeeded=job.sources_succeeded
+                        + (result.outcome == ChunkExtractionOutcome.SUCCESS),
+                        sources_empty=job.sources_empty
+                        + (result.outcome == ChunkExtractionOutcome.EMPTY),
+                        entities_extracted=job.entities_extracted + len(result.entities),
+                        relationships_extracted=job.relationships_extracted
+                        + len(result.relationships),
+                    )
 
                 logger.info(
-                    f"[{job.chunks_completed}/{job.total_chunks}] Chunk extracted",
+                    (
+                        f"[{job.chunks_completed + job.chunks_failed}/"
+                        f"{job.selected_sources}] Source processed"
+                    ),
                     chunk_id=result.chunk_id,
+                    outcome=result.outcome.value,
                     entities=len(result.entities),
                     rels=len(result.relationships),
                 )
@@ -363,9 +446,47 @@ def create_mcp_server(
             # Final flush
             await flush()
 
-            job_manager.update_status(job.id, JobStatus.COMPLETE)
+            # Relationship endpoints may have been extracted in different batches.
+            # Persist relationships only after every entity batch has been written;
+            # otherwise MATCH silently drops a relationship whose endpoint arrives
+            # in a later (and asynchronously completed) batch.
+            relationship_stats = await write_batch_to_neo4j(
+                all_results,
+                schema,
+                source_label,
+                metadata,
+                write_entities=False,
+            )
+            job_manager.update_progress(
+                job.id,
+                relationships_created=job.relationships_created
+                + relationship_stats["relationships_created"],
+            )
+
+            persisted = await count_persisted_sources(
+                [
+                    result.chunk_id
+                    for result in all_results
+                    if result.outcome == ChunkExtractionOutcome.SUCCESS
+                ],
+                source_label,
+                metadata,
+            )
+            job_manager.update_progress(job.id, sources_persisted=persisted)
+
+            if job.sources_failed:
+                job_manager.update_status(
+                    job.id,
+                    JobStatus.FAILED,
+                    error=(
+                        f"Coverage failure: {job.sources_failed}/{job.selected_sources} "
+                        "selected source units failed extraction"
+                    ),
+                )
+            else:
+                job_manager.update_status(job.id, JobStatus.COMPLETE)
             logger.info(
-                "Extraction job complete",
+                "Extraction job finished",
                 job_id=job.id,
                 entities_created=job.entities_created,
                 relationships_created=job.relationships_created,
@@ -779,7 +900,7 @@ def create_mcp_server(
 
         # Query and classify chunks
         try:
-            chunks = await query_and_classify_chunks(source_label, force)
+            chunks, eligible_sources = await query_and_classify_chunks(source_label, force)
         except Exception as e:
             raise ToolError(f"Failed to query chunks from Neo4j: {e}")
 
@@ -789,6 +910,8 @@ def create_mcp_server(
                     "status": "success",
                     "message": "No chunks to process (all may have been extracted already, or no matching nodes found)",
                     "job_id": None,
+                    "eligible_sources": eligible_sources,
+                    "selected_sources": 0,
                 },
                 indent=2,
             )
@@ -809,6 +932,8 @@ def create_mcp_server(
             total_chunks=len(chunks),
             text_chunks=len(text_chunks),
             vlm_chunks=len(vlm_chunks),
+            eligible_sources=eligible_sources,
+            selected_sources=len(chunks),
             pass_type=pt,
             pass_number=pass_number,
         )
@@ -834,6 +959,8 @@ def create_mcp_server(
                 "job_id": job.id,
                 "model": actual_model,
                 "total_chunks": len(chunks),
+                "eligible_sources": eligible_sources,
+                "selected_sources": len(chunks),
                 "text_chunks": len(text_chunks),
                 "vlm_chunks": len(vlm_chunks),
                 "message": (

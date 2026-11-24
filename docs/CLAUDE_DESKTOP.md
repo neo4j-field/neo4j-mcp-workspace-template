@@ -8,7 +8,7 @@
    - **Documents DB** — URI, username, password, database name (e.g. `neo4j`)
    - **Ontology DB** — URI, username, password, database name (e.g. `neo4j` on Aura, `ontology` on Neo4j Desktop). Leave URI/username/password blank to reuse the Documents DB credentials.
    - **OpenAI API key** — for embeddings; also used for extraction if your extraction model is OpenAI
-   - **Extraction model** — defaults to `openai/gpt-5.4-mini`; change to any [LiteLLM-compatible](https://docs.litellm.ai/docs/providers) model
+   - **Extraction model** — defaults to `openai/gpt-6-luna`; change to any [LiteLLM-compatible](https://docs.litellm.ai/docs/providers) model
 4. Click **Install** — all MCP servers start automatically
 
 > **Prerequisites:** [uv](https://docs.astral.sh/uv/) installed, two Neo4j databases (Documents + Ontology), and an LLM API key. See the [README](../README.md#claude-desktop) for the full prerequisite list and platform-specific `uv` install instructions.
@@ -130,3 +130,23 @@ Claude always reads the latest state of the Ontology DB — no restart needed.
 | `embed_chunks` fails | Missing `OPENAI_API_KEY` | Check OpenAI API Key field in extension settings |
 | Re-extraction doesn't reflect ontology edits | Schema not regenerated | Ask Claude to "regenerate the schema" before re-extracting, or use `extract_entities(ontology_name=...)` which always regenerates |
 | Entity extraction slow / stuck | Background async processing | Ask Claude to "check extraction status" |
+
+## Headless release smoke test
+
+The repository can verify the maintained Desktop stdio path without opening the
+Claude Desktop GUI. The test reads `command` and `args` directly from
+`neo4j-mcp-workspace-dxt/manifest.json`, performs MCP initialization and live
+tool discovery, validates the skill's lexical calls against those runtime
+schemas, ingests and embeds a one-page PDF, verifies `text_embedding`, and
+removes its exact fixture data:
+
+```bash
+NEO4J_MCP_RUN_DESKTOP_SMOKE=1 uv run --env-file .env \
+  --project mcp-neo4j-proxy python -m unittest \
+  tests.integration.test_desktop_lexical_smoke_mcp -v
+```
+
+The test preserves and snapshots the retained `golden-e2e-20260910` graph. It
+does not test Claude Desktop's GUI, extension installation/config discovery, or
+restart behavior. The single manual release check is to install the built DXT,
+restart Claude Desktop, and confirm its Neo4j Workspace tools are visible.

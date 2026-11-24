@@ -103,8 +103,8 @@
     "extraction_model": {
       "type": "string",
       "title": "Extraction Model (LiteLLM format)",
-      "description": "LiteLLM model identifier. Examples: openai/gpt-5.4-mini, anthropic/claude-haiku-4-5-20251001, ollama/llama3.2",
-      "default": "openai/gpt-5.4-mini"
+      "description": "LiteLLM model identifier. Examples: openai/gpt-6-luna, anthropic/claude-haiku-4-5-20251001, ollama/llama3.2",
+      "default": "openai/gpt-6-luna"
     },
     "extra_env": {
       "type": "string",
