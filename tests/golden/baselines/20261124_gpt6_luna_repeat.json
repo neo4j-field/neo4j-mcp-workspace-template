@@ -1,0 +1,67 @@
+{
+  "metadata": {
+    "model": "gpt-6-luna",
+    "run_at": "2026-11-24T14:50:19.729864+00:00",
+    "schema_sha256": "87906297da30c34e860816fea2acd5ad211069e4e445ad6592bd9033eea55f33",
+    "reference_sha256": "3b3197a4fcc2e8aaa3e64642a4a1e7e57f011a283a6dfd8c93d611cd87b8fd3d",
+    "source": "live TextExtractor; no Neo4j writes; no reference facts sent to model"
+  },
+  "cases": [
+    {
+      "id": "maintenance-1",
+      "entities": [
+        {
+          "label": "Technician",
+          "key": "maya chen"
+        },
+        {
+          "label": "Equipment",
+          "key": "px-17"
+        },
+        {
+          "label": "Facility",
+          "key": "cedar works"
+        }
+      ],
+      "relationships": [
+        {
+          "type": "INSPECTED",
+          "source": [
+            "Technician",
+            "maya chen"
+          ],
+          "target": [
+            "Equipment",
+            "px-17"
+          ]
+        },
+        {
+          "type": "LOCATED_AT",
+          "source": [
+            "Equipment",
+            "px-17"
+          ],
+          "target": [
+            "Facility",
+            "cedar works"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "maintenance-2",
+      "entities": [
+        {
+          "label": "Equipment",
+          "key": "px-18"
+        }
+      ],
+      "relationships": []
+    },
+    {
+      "id": "maintenance-3",
+      "entities": [],
+      "relationships": []
+    }
+  ]
+}

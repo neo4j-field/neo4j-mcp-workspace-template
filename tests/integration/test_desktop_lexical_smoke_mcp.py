@@ -137,7 +137,7 @@ class DesktopLexicalSmokeTests(unittest.IsolatedAsyncioTestCase):
         return await self._query(
             """
             MATCH (n)
-            WHERE any(k IN keys(n) WHERE toString(n[k]) CONTAINS $golden)
+            WHERE any(k IN keys(n) WHERE toStringOrNull(n[k]) CONTAINS $golden)
                OR coalesce(n.id, '') STARTS WITH $golden
                OR coalesce(n.sourceId, '') STARTS WITH $golden
             WITH collect(n) AS nodes

@@ -153,7 +153,9 @@ def build_user_prompt_vlm(chunk: ClassifiedChunk) -> list[dict[str, Any]]:
     return content
 
 
-def load_extraction_output_model(pydantic_model_path: str) -> Type[BaseModel]:
+def load_extraction_output_model(
+    pydantic_model_path: str, *, source_bytes: bytes | None = None,
+) -> Type[BaseModel]:
     """Dynamically load the ExtractionOutput class from a generated .py file.
 
     Args:
@@ -175,7 +177,10 @@ def load_extraction_output_model(pydantic_model_path: str) -> Type[BaseModel]:
 
     module = importlib.util.module_from_spec(spec)
     sys.modules["extraction_models"] = module
-    spec.loader.exec_module(module)
+    # Read source directly: timestamp/size-based bytecode caches can otherwise
+    # load stale validators after a rapid schema edit of the same file length.
+    code = source_bytes if source_bytes is not None else path.read_bytes()
+    exec(compile(code, str(path), "exec"), module.__dict__)
 
     if not hasattr(module, "ExtractionOutput"):
         raise ValueError(

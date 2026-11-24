@@ -33,11 +33,15 @@ from .base_extractor import (
     load_extraction_output_model,
     schema_from_pydantic_module,
 )
+from .extraction_identity import extraction_fingerprint, source_fingerprint, digest, classify_source
+from .ownership import (
+    write_entity as write_owned_entity, write_relationship as write_owned_relationship,
+    remove_contributions, collect_unused_entities, identifier, coalesce_result,
+)
 from .job_manager import ExtractionJobInfo, JobManager, JobStatus
 from .models import (
     ChunkExtractionOutcome,
     ChunkExtractionResult,
-    ChunkType,
     ClassifiedChunk,
     ExtractionMetadata,
     ExtractionSchema,
@@ -95,24 +99,23 @@ def create_mcp_server(
     async def query_and_classify_chunks(
         source_label: str,
         force: bool,
+        fingerprint: str,
+        source_ids: Optional[list[str]],
     ) -> tuple[list[ClassifiedChunk], int]:
         """Query Neo4j for source nodes and classify them as text or VLM."""
 
-        # Count all content-eligible sources separately from the current selection.
-        # Keep the skip filter in Neo4j so already-processed images are not transferred.
+        # Hash actual source inputs before selecting work. Provenance links alone
+        # are not evidence that this schema/configuration completed successfully.
         count_query = f"""
             MATCH (n:{source_label})
-            WHERE n.text IS NOT NULL OR n.imageBase64 IS NOT NULL
+            WHERE (n.text IS NOT NULL OR n.imageBase64 IS NOT NULL)
+              AND ($source_ids IS NULL OR n.id IN $source_ids)
             RETURN count(n) AS eligible_sources
         """
-        force_filter = ""
-        if not force:
-            force_filter = "AND NOT (n)<-[:EXTRACTED_FROM]-()"
-
         query = f"""
             MATCH (n:{source_label})
             WHERE (n.text IS NOT NULL OR n.imageBase64 IS NOT NULL)
-            {force_filter}
+              AND ($source_ids IS NULL OR n.id IN $source_ids)
             RETURN
                 n.id AS id,
                 n.text AS text,
@@ -122,45 +125,27 @@ def create_mcp_server(
                 n.sectionContext AS sectionContext,
                 n.imageBase64 AS imageBase64,
                 n.imageMimeType AS imageMimeType,
-                n.textAsHtml AS textAsHtml
+                n.textAsHtml AS textAsHtml,
+                n.caption AS caption,
+                [(n)<-[p:PROCESSED_SOURCE]-(run:EntityExtractionRun)
+                 WHERE run.fingerprint = $fingerprint AND run.status = 'complete'
+                   AND coalesce(p.invalidated, false) = false
+                 | p.sourceFingerprint] AS completedFingerprints
         """
 
         async with neo4j_driver.session(database=database) as session:
-            count_result = await session.run(count_query)
+            count_result = await session.run(count_query, source_ids=source_ids)
             count_record = await count_result.single()
-            result = await session.run(query)
+            result = await session.run(query, fingerprint=fingerprint, source_ids=source_ids)
             records = await result.data()
         eligible_sources = count_record["eligible_sources"] if count_record else 0
 
         chunks: list[ClassifiedChunk] = []
         for r in records:
-            chunk_type_str = r.get("type", "text")
-            has_image = r.get("imageBase64") is not None
-            is_page = r.get("isPage", False)
-
-            if is_page and has_image:
-                ct = ChunkType.PAGE
-            elif chunk_type_str == "image" and has_image:
-                ct = ChunkType.IMAGE
-            elif chunk_type_str == "table" and has_image:
-                ct = ChunkType.TABLE
-            elif has_image and chunk_type_str not in ("text",):
-                ct = ChunkType.IMAGE
-            else:
-                ct = ChunkType.TEXT
-
-            chunks.append(
-                ClassifiedChunk(
-                    id=r["id"],
-                    chunk_type=ct,
-                    text=r.get("text"),
-                    document_name=r.get("documentName"),
-                    section_context=r.get("sectionContext"),
-                    image_base64=r.get("imageBase64"),
-                    image_mime_type=r.get("imageMimeType"),
-                    text_as_html=r.get("textAsHtml"),
-                )
-            )
+            chunk = classify_source(r)
+            chunks.append(chunk)
+            if not force and source_fingerprint(chunk) in (r.get("completedFingerprints") or []):
+                chunks.pop()
 
         return chunks, eligible_sources
 
@@ -174,6 +159,9 @@ def create_mcp_server(
         source_label: str,
         metadata: ExtractionMetadata,
         *,
+        property_policy: str = "preserve_existing",
+        transaction: Any,
+        scope_id: str,
         write_entities: bool = True,
         write_relationships: bool = True,
     ) -> dict[str, int]:
@@ -193,11 +181,16 @@ def create_mcp_server(
                 entity_schema = schema.get_entity_schema(entity.label)
                 if entity_schema:
                     key_value = entity.properties.get(entity_schema.key_property)
-                    if key_value:
+                    if key_value is not None and key_value != "":
                         entities_by_label[entity.label].append(
                             {
                                 "key_value": key_value,
-                                "properties": entity.properties,
+                                "properties": {
+                                    k: v for k, v in entity.properties.items() if v is not None
+                                },
+                                "proposed_json": json.dumps(
+                                    entity.properties, ensure_ascii=False, default=str
+                                ),
                                 "chunk_id": chunk_result.chunk_id,
                             }
                         )
@@ -222,59 +215,37 @@ def create_mcp_server(
                             "target_key_property": target_schema.key_property,
                             "source_key_value": rel.source_key,
                             "target_key_value": rel.target_key,
-                            "properties": rel.properties,
+                            "properties": {k: v for k, v in rel.properties.items() if v is not None},
+                            "chunk_id": chunk_result.chunk_id,
                         }
                     )
 
         meta_props = {
             "model": metadata.model,
+            "runId": metadata.run_id,
+            "extractionFingerprint": metadata.fingerprint,
             "extractedAt": metadata.timestamp,
             "passNumber": metadata.pass_number,
             "passType": metadata.pass_type.value,
         }
 
-        async with neo4j_driver.session(database=database) as session:
-            if write_entities:
-                for label, entities in entities_by_label.items():
-                    if not entities:
-                        continue
-                    entity_schema = schema.get_entity_schema(label)
-                    if not entity_schema:
-                        continue
-
-                    query = f"""
-                        UNWIND $entities AS entity
-                        MERGE (e:{label} {{{entity_schema.key_property}: entity.key_value}})
-                        SET e += entity.properties
-                        WITH e, entity
-                        MATCH (c:{source_label} {{id: entity.chunk_id}})
-                        MERGE (e)-[r:EXTRACTED_FROM]->(c)
-                        SET r += $meta
-                        RETURN count(DISTINCT e) as entities_created, count(*) as rels_created
-                    """
-
-                    result = await session.run(query, entities=entities, meta=meta_props)
-                    record = await result.single()
-                    if record:
-                        stats["entities_created"] += record["entities_created"]
-                        stats["extracted_from_created"] += record["rels_created"]
-
-            if write_relationships:
-                for key, rels in rels_by_type.items():
-                    if not rels:
-                        continue
-                    first = rels[0]
-                    query = f"""
-                        UNWIND $relationships AS rel
-                        MATCH (source:{first['source_label']} {{{first['source_key_property']}: rel.source_key_value}})
-                        MATCH (target:{first['target_label']} {{{first['target_key_property']}: rel.target_key_value}})
-                        MERGE (source)-[r:{first['type']}]->(target)
-                        SET r += rel.properties
-                        RETURN count(r) as created
-                    """
-                    result = await session.run(query, relationships=rels)
-                    record = await result.single()
-                    stats["relationships_created"] += record["created"] if record else 0
+        if write_entities:
+            ids = set()
+            for label, entities in entities_by_label.items():
+                entity_schema = schema.get_entity_schema(label)
+                for entity in entities:
+                    object_id = await write_owned_entity(
+                        transaction, source_label, label, entity_schema.key_property,
+                        entity, meta_props, property_policy, scope_id,
+                    )
+                    ids.add(object_id)
+                    stats["extracted_from_created"] += 1
+            stats["entities_created"] = len(ids)
+        if write_relationships:
+            for rels in rels_by_type.values():
+                for rel in rels:
+                    await write_owned_relationship(transaction, source_label, rel, meta_props, scope_id, property_policy)
+                    stats["relationships_created"] += 1
 
         return stats
 
@@ -282,6 +253,7 @@ def create_mcp_server(
         source_ids: list[str],
         source_label: str,
         metadata: ExtractionMetadata,
+        transaction: Any,
     ) -> int:
         """Count source units linked by this exact extraction run."""
         if not source_ids:
@@ -291,13 +263,10 @@ def create_mcp_server(
             WHERE c.id IN $source_ids AND r.extractedAt = $extracted_at
             RETURN count(DISTINCT c) AS sources_persisted
         """
-        async with neo4j_driver.session(database=database) as session:
-            result = await session.run(
-                query,
-                source_ids=source_ids,
-                extracted_at=metadata.timestamp,
-            )
-            record = await result.single()
+        result = await transaction.run(
+            query, source_ids=source_ids, extracted_at=metadata.timestamp,
+        )
+        record = await result.single()
         return record["sources_persisted"] if record else 0
 
     # ========================================
@@ -313,9 +282,23 @@ def create_mcp_server(
         text_parallel: int,
         vlm_parallel: int,
         batch_size: int,
+        property_policy: str,
+        fingerprint: str,
+        scope_id: str,
     ) -> None:
         """Background task that performs the actual extraction."""
+        tasks: list[asyncio.Task] = []
         try:
+            # A forced/incompatible attempt may partially write before failing.
+            # Invalidate older completion evidence before any such write so a
+            # later request cannot silently reuse a now-partial graph state.
+            async with neo4j_driver.session(database=database) as session:
+                result = await session.run(
+                    f"MATCH (n:{source_label})<-[p:PROCESSED_SOURCE]-(:EntityExtractionRun) "
+                    "WHERE n.id IN $source_ids SET p.invalidated = true",
+                    source_ids=[c.id for c in chunks],
+                )
+                await result.consume()
             job_manager.update_status(job.id, JobStatus.EXTRACTING)
 
             text_chunks = [c for c in chunks if not c.needs_vlm]
@@ -325,40 +308,12 @@ def create_mcp_server(
             vlm_extractor = VlmExtractor(model=job.model)
 
             metadata = ExtractionMetadata(
-                model=job.model,
+                model=job.model, run_id=job.id, fingerprint=fingerprint,
                 pass_number=job.pass_number,
                 pass_type=job.pass_type,
             )
 
             all_results: list[ChunkExtractionResult] = []
-            buffer: list[ChunkExtractionResult] = []
-
-            async def flush():
-                nonlocal buffer
-                if not buffer:
-                    return
-                to_write = buffer.copy()
-                buffer = []
-                job_manager.update_status(job.id, JobStatus.WRITING)
-                write_stats = await write_batch_to_neo4j(
-                    to_write,
-                    schema,
-                    source_label,
-                    metadata,
-                    write_relationships=False,
-                )
-                job_manager.update_progress(
-                    job.id,
-                    batches_written=job.batches_written + 1,
-                    entities_created=job.entities_created
-                    + write_stats["entities_created"],
-                    relationships_created=job.relationships_created
-                    + write_stats["relationships_created"],
-                    extracted_from_created=job.extracted_from_created
-                    + write_stats["extracted_from_created"],
-                )
-                job_manager.update_status(job.id, JobStatus.EXTRACTING)
-
             # Run text and VLM extraction concurrently
             text_semaphore = asyncio.Semaphore(text_parallel)
             vlm_semaphore = asyncio.Semaphore(vlm_parallel)
@@ -392,7 +347,6 @@ def create_mcp_server(
                         )
 
             # Create all tasks
-            tasks: list[asyncio.Task] = []
             for c in text_chunks:
                 tasks.append(asyncio.create_task(extract_text_chunk(c)))
             for c in vlm_chunks:
@@ -414,9 +368,8 @@ def create_mcp_server(
                         failure_details=failure_details,
                     )
                 else:
+                    result = coalesce_result(result, schema, property_policy)
                     all_results.append(result)
-                    if result.outcome == ChunkExtractionOutcome.SUCCESS:
-                        buffer.append(result)
                     job_manager.update_progress(
                         job.id,
                         chunks_completed=job.chunks_completed + 1,
@@ -440,50 +393,94 @@ def create_mcp_server(
                     rels=len(result.relationships),
                 )
 
-                if len(buffer) >= batch_size:
-                    await flush()
-
-            # Final flush
-            await flush()
-
-            # Relationship endpoints may have been extracted in different batches.
-            # Persist relationships only after every entity batch has been written;
-            # otherwise MATCH silently drops a relationship whose endpoint arrives
-            # in a later (and asynchronously completed) batch.
-            relationship_stats = await write_batch_to_neo4j(
-                all_results,
-                schema,
-                source_label,
-                metadata,
-                write_entities=False,
-            )
-            job_manager.update_progress(
-                job.id,
-                relationships_created=job.relationships_created
-                + relationship_stats["relationships_created"],
-            )
-
-            persisted = await count_persisted_sources(
-                [
-                    result.chunk_id
-                    for result in all_results
-                    if result.outcome == ChunkExtractionOutcome.SUCCESS
-                ],
-                source_label,
-                metadata,
-            )
-            job_manager.update_progress(job.id, sources_persisted=persisted)
-
+            # Canonical first-wins precedence must not depend on API completion order.
+            all_results.sort(key=lambda r: r.chunk_id)
             if job.sources_failed:
                 job_manager.update_status(
-                    job.id,
-                    JobStatus.FAILED,
-                    error=(
-                        f"Coverage failure: {job.sources_failed}/{job.selected_sources} "
-                        "selected source units failed extraction"
-                    ),
+                    job.id, JobStatus.FAILED,
+                    error=f"Coverage failure: {job.sources_failed}/{job.selected_sources} selected source units failed extraction",
                 )
             else:
+                async def publish(tx):
+                    # Lock source rows in a stable order and invalidate completion
+                    # again at publication, after any concurrent earlier publish.
+                    result = await tx.run(
+                        f"MATCH (n:{source_label}) WHERE n.id IN $source_ids "
+                        "WITH n ORDER BY n.id "
+                        "SET n.__extractionPublicationLock = coalesce(n.__extractionPublicationLock, 0) + 1 "
+                        "WITH n OPTIONAL MATCH (n)<-[p:PROCESSED_SOURCE]-(:EntityExtractionRun) "
+                        "SET p.invalidated = true",
+                        source_ids=[c.id for c in chunks],
+                    )
+                    await result.consume()
+                    current = await (await tx.run(
+                        f"MATCH (n:{source_label}) WHERE n.id IN $source_ids RETURN "
+                        "n.id AS id, n.text AS text, coalesce(n.type, 'text') AS type, n:Page AS isPage, "
+                        "n.documentName AS documentName, n.sectionContext AS sectionContext, "
+                        "n.imageBase64 AS imageBase64, n.imageMimeType AS imageMimeType, "
+                        "n.textAsHtml AS textAsHtml, n.caption AS caption",
+                        source_ids=[c.id for c in chunks],
+                    )).data()
+                    actual = sorted((r["id"], source_fingerprint(classify_source(r))) for r in current)
+                    expected = sorted((c.id, source_fingerprint(c)) for c in chunks)
+                    if actual != expected:
+                        raise RuntimeError("Source inputs changed while extraction was running; retry with current inputs")
+                    # The transaction rolls back cleanup and new output together.
+                    candidates = await remove_contributions(
+                        tx, source_label, [c.id for c in chunks], scope_id,
+                    )
+                    totals = {"entities_created": 0, "relationships_created": 0, "extracted_from_created": 0}
+                    batches = 0
+                    for offset in range(0, len(all_results), batch_size):
+                        batch_stats = await write_batch_to_neo4j(
+                            all_results[offset:offset + batch_size], schema, source_label,
+                            metadata, property_policy=property_policy, transaction=tx,
+                            scope_id=scope_id, write_relationships=False,
+                        )
+                        for key in totals:
+                            totals[key] += batch_stats[key]
+                        batches += 1
+                    if totals["extracted_from_created"] != sum(len(r.entities) for r in all_results):
+                        raise RuntimeError("Entity persistence mismatch")
+                    relationships = await write_batch_to_neo4j(
+                        all_results, schema, source_label, metadata, transaction=tx,
+                        scope_id=scope_id, property_policy=property_policy, write_entities=False,
+                    )
+                    totals["relationships_created"] = relationships["relationships_created"]
+                    if totals["relationships_created"] != sum(len(r.relationships) for r in all_results):
+                        raise RuntimeError("Relationship persistence mismatch")
+                    await collect_unused_entities(tx, candidates)
+                    persisted = await count_persisted_sources(
+                        [r.chunk_id for r in all_results if r.outcome == ChunkExtractionOutcome.SUCCESS],
+                        source_label, metadata, tx,
+                    )
+                    result = await tx.run(
+                        f"""
+                        MERGE (run:EntityExtractionRun {{runId: $run_id}})
+                        SET run.fingerprint=$fingerprint, run.model=$model, run.sourceLabel=$source_label,
+                            run.scopeId=$scope, run.completedAt=datetime(), run.status='writing'
+                        WITH run UNWIND $sources AS source
+                        MATCH (n:{source_label} {{id: source.id}})
+                        MERGE (run)-[p:PROCESSED_SOURCE {{sourceFingerprint: source.hash}}]->(n)
+                        SET p.invalidated=false
+                        WITH run, count(p) AS published
+                        SET run.status = CASE WHEN published=$expected THEN 'complete' ELSE 'failed' END
+                        RETURN published
+                        """,
+                        run_id=job.id, fingerprint=fingerprint, model=job.model,
+                        source_label=source_label, scope=scope_id,
+                        sources=[{"id": c.id, "hash": source_fingerprint(c)} for c in chunks],
+                        expected=len(chunks),
+                    )
+                    record = await result.single()
+                    if record is None or record["published"] != len(chunks):
+                        raise RuntimeError("Could not publish completion for every selected source")
+                    return {**totals, "batches_written": batches, "sources_persisted": persisted}
+
+                job_manager.update_status(job.id, JobStatus.WRITING)
+                async with neo4j_driver.session(database=database) as session:
+                    published = await session.execute_write(publish)
+                job_manager.update_progress(job.id, **published)
                 job_manager.update_status(job.id, JobStatus.COMPLETE)
             logger.info(
                 "Extraction job finished",
@@ -506,6 +503,12 @@ def create_mcp_server(
                 error=str(e),
                 error_type=type(e).__name__,
             )
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
 
     # ========================================
     # TOOL 1: Convert Schema
@@ -529,6 +532,10 @@ def create_mcp_server(
         output_path: str = Field(
             ...,
             description="Path to save the Pydantic .py file (e.g. /path/to/schema.py).",
+        ),
+        key_normalization: Optional[dict[str, Literal["strip", "strip_lower"]]] = Field(
+            default=None,
+            description="Per-entity-label key policy, shared by relationship endpoints. Default strip preserves case; strip_lower must match CSV keys.",
         ),
     ) -> str:
         """
@@ -598,7 +605,9 @@ def create_mcp_server(
             # Write Pydantic models to output_path
             pydantic_path = pathlib.Path(output_path)
             pydantic_path.parent.mkdir(parents=True, exist_ok=True)
-            pydantic_code = generate_extraction_models_code(schema)
+            pydantic_code = generate_extraction_models_code(
+                schema, key_normalization=key_normalization
+            )
             pydantic_path.write_text(pydantic_code)
 
             logger.info("Pydantic models saved", pydantic_path=str(pydantic_path))
@@ -758,7 +767,7 @@ def create_mcp_server(
         annotations=ToolAnnotations(
             title="Extract Entities from Graph",
             readOnlyHint=False,
-            destructiveHint=False,
+            destructiveHint=True,
             idempotentHint=False,
             openWorldHint=True,
         ),
@@ -783,9 +792,20 @@ def create_mcp_server(
             default="Chunk",
             description="Label of source nodes to extract from (Chunk or Page)",
         ),
+        source_ids: Optional[list[str]] = Field(
+            default=None, description="Optional source node IDs to rebuild. Default: all eligible sources.",
+        ),
+        extraction_scope: Optional[str] = Field(
+            default=None,
+            description="Stable ownership scope across schema revisions. Defaults to ontology name or absolute schema path. Other scopes coexist.",
+        ),
+        property_policy: Literal["preserve_existing", "overwrite"] = Field(
+            default="preserve_existing",
+            description="Entity and relationship property conflict policy. Preserve existing non-null values by default; overwrite explicitly replaces them. Null proposals do not delete external properties; omitted/null fields withdraw prior owned assertions during replacement. Proposed values and conflicts are recorded on source contribution records.",
+        ),
         force: bool = Field(
             default=False,
-            description="If true, re-extract all nodes. If false, skip nodes with existing EXTRACTED_FROM.",
+            description="If true, re-extract all eligible nodes. Otherwise skip only sources with matching successful completion evidence, source content, schema, extractor, model and configuration.",
         ),
         text_parallel: int = Field(
             default=20,
@@ -822,6 +842,8 @@ def create_mcp_server(
         - Visual chunks (images, tables, pages): sent to VLM with text + image (parallel: vlm_parallel)
         """
         actual_model = model or extraction_model
+        if batch_size < 1 or text_parallel < 1 or vlm_parallel < 1:
+            raise ToolError("batch_size and extraction parallelism must be positive")
 
         # Validate pass_type
         try:
@@ -882,7 +904,8 @@ def create_mcp_server(
             raise ToolError(f"Schema must be a .py file generated by convert_schema, got: {schema_path.suffix}")
 
         try:
-            output_model = load_extraction_output_model(schema)
+            schema_source = schema_path.read_bytes()
+            output_model = load_extraction_output_model(schema, source_bytes=schema_source)
             module = sys.modules.get("extraction_models")
             if module is None:
                 raise ToolError("Failed to load extraction_models module")
@@ -900,7 +923,16 @@ def create_mcp_server(
 
         # Query and classify chunks
         try:
-            chunks, eligible_sources = await query_and_classify_chunks(source_label, force)
+            identifier(source_label)
+            scope_id = digest({"source_label": source_label, "scope": extraction_scope or (
+                f"ontology:{ontology_name}" if ontology_name else str(schema_path.resolve())
+            )})
+            fingerprint = extraction_fingerprint(
+                schema_path, model=actual_model, source_label=source_label,
+                property_policy=property_policy, pass_type=pt.value, pass_number=pass_number,
+                schema_source=schema_source, scope_id=scope_id,
+            )
+            chunks, eligible_sources = await query_and_classify_chunks(source_label, force, fingerprint, source_ids)
         except Exception as e:
             raise ToolError(f"Failed to query chunks from Neo4j: {e}")
 
@@ -912,9 +944,27 @@ def create_mcp_server(
                     "job_id": None,
                     "eligible_sources": eligible_sources,
                     "selected_sources": 0,
+                    "extraction_fingerprint": fingerprint,
                 },
                 indent=2,
             )
+
+        # Legacy links have no reliable deletion/property ownership. Refuse
+        # rather than guessing that their connected nodes belong to extraction.
+        async with neo4j_driver.session(database=database) as session:
+            record = await (await session.run(
+                f"MATCH (c:{identifier(source_label)})<-[r:EXTRACTED_FROM]-(e) "
+                "WHERE c.id IN $source_ids AND (coalesce(r.ownershipVersion, 0) <> 1 "
+                "OR r.extractionScope IS NULL OR r.proposedPropertiesJson IS NULL "
+                "OR e.__extractionValues IS NULL) "
+                "RETURN count(r) AS legacy",
+                source_ids=[c.id for c in chunks],
+            )).single()
+            if record and record["legacy"]:
+                raise ToolError(
+                    "Legacy EXTRACTED_FROM links lack ownership metadata. Use a fresh source namespace "
+                    "or an explicitly reviewed ownership migration; existing data was not replaced."
+                )
 
         text_chunks = [c for c in chunks if not c.needs_vlm]
         vlm_chunks = [c for c in chunks if c.needs_vlm]
@@ -938,6 +988,8 @@ def create_mcp_server(
             pass_number=pass_number,
         )
 
+        job.extraction_fingerprint = fingerprint
+
         # Launch background task
         task = asyncio.create_task(
             _run_extraction_job(
@@ -949,6 +1001,9 @@ def create_mcp_server(
                 text_parallel=text_parallel,
                 vlm_parallel=vlm_parallel,
                 batch_size=batch_size,
+                property_policy=property_policy,
+                fingerprint=fingerprint,
+                scope_id=scope_id,
             )
         )
         job_manager.register_task(job.id, task)
@@ -956,6 +1011,7 @@ def create_mcp_server(
         return json.dumps(
             {
                 "status": "started",
+                "extraction_fingerprint": fingerprint,
                 "job_id": job.id,
                 "model": actual_model,
                 "total_chunks": len(chunks),

@@ -57,6 +57,8 @@ def _identifier(value: Any, field: str) -> str:
 def _property(raw: Any, field: str) -> tuple[str, str, str]:
     prop = _mapping(raw, field)
     name = _identifier(prop.get("name"), f"{field}.name")
+    if name.startswith(("__extraction", "__structured")):
+        raise IngestModelError(f"{field}.name uses reserved ownership metadata")
     source = prop.get("source")
     if source is None:
         column = name
@@ -108,6 +110,8 @@ def compile_node_ingest_query(node: Mapping[str, Any] | str) -> str:
 
     node = _mapping(node, "node")
     label = _identifier(node.get("label"), "node.label")
+    if label in {"EntityExtractionRun", "EntityExtractionClaim"}:
+        raise IngestModelError("node.label is reserved for extraction metadata")
     key = _property(node.get("key_property"), "node.key_property")
     properties = _properties(node.get("properties", []), "node.properties")
     if key[0] in {name for name, _, _ in properties}:
@@ -119,7 +123,12 @@ def compile_node_ingest_query(node: Mapping[str, Any] | str) -> str:
         f"MERGE (node:{label} "
         f"{{{key_name}: {_record_expression(key_column, key_type)}}})"
     )
-    return query + _set_clause("node", properties)
+    ownership = json.dumps([key_name] + [name for name, _, _ in properties])
+    return query + _set_clause("node", properties) + (
+        "\nSET node.__structuredSource = true,"
+        f" node.__structuredProperties = reduce(owned = coalesce(node.__structuredProperties, []),"
+        f" key IN {ownership} | CASE WHEN key IN owned THEN owned ELSE owned + key END)"
+    )
 
 
 def compile_relationship_ingest_query(
@@ -137,6 +146,9 @@ def compile_relationship_ingest_query(
     end_label = _identifier(
         relationship.get("end_node_label"), "relationship.end_node_label"
     )
+
+    if {start_label, end_label} & {"EntityExtractionRun", "EntityExtractionClaim"} or relationship_type in {"EXTRACTED_FROM", "PROCESSED_SOURCE", "CLAIM_SOURCE"}:
+        raise IngestModelError("relationship uses reserved extraction metadata")
 
     raw_nodes = data_model.get("nodes")
     if not isinstance(raw_nodes, list):
@@ -180,4 +192,9 @@ def compile_relationship_ingest_query(
         f"{{{end_name}: {_record_expression(end_column, end_type)}}})\n"
         f"MERGE (start)-{merge_relationship}->(end)"
     )
-    return query + _set_clause("relationship", properties)
+    ownership = json.dumps(([relationship_key[0]] if relationship_key else []) + [name for name, _, _ in properties])
+    return query + _set_clause("relationship", properties) + (
+        "\nSET relationship.__structuredSource = true,"
+        f" relationship.__structuredProperties = reduce(owned = coalesce(relationship.__structuredProperties, []),"
+        f" key IN {ownership} | CASE WHEN key IN owned THEN owned ELSE owned + key END)"
+    )

@@ -52,6 +52,14 @@ class EntityExtractionCoverageMCPIntegrationTests(unittest.IsolatedAsyncioTestCa
     async def _cleanup_fixture(self) -> None:
         async with self.driver.session(database=DATABASE) as session:
             await session.run(
+                "MATCH (claim:EntityExtractionClaim) WHERE claim.sourceLabel IN $labels DETACH DELETE claim",
+                labels=['Bug003ChunkSource', 'Bug003PageSource', 'Test002RestartSource'],
+            )
+            await session.run(
+                "MATCH (run:EntityExtractionRun) WHERE run.sourceLabel IN $labels DETACH DELETE run",
+                labels=['Bug003ChunkSource', 'Bug003PageSource', 'Test002RestartSource'],
+            )
+            await session.run(
                 """
                 MATCH (n) WHERE n.testRunId IN $testRunIds
                 DETACH DELETE n
@@ -64,7 +72,7 @@ class EntityExtractionCoverageMCPIntegrationTests(unittest.IsolatedAsyncioTestCa
             result = await session.run(
                 """
                 MATCH (n)
-                WHERE any(k IN keys(n) WHERE toString(n[k]) CONTAINS 'golden-e2e-20260910')
+                WHERE any(k IN keys(n) WHERE toStringOrNull(n[k]) CONTAINS 'golden-e2e-20260910')
                    OR coalesce(n.id, '') STARTS WITH 'golden-e2e-20260910'
                    OR coalesce(n.sourceId, '') STARTS WITH 'golden-e2e-20260910'
                 WITH collect(n) AS nodes
@@ -170,7 +178,7 @@ class EntityExtractionCoverageMCPIntegrationTests(unittest.IsolatedAsyncioTestCa
         self.assertEqual(1, status["sources_succeeded"])
         self.assertEqual(1, status["sources_empty"])
         self.assertEqual(1, status["sources_failed"])
-        self.assertEqual(1, status["sources_persisted"])
+        self.assertEqual(0, status["sources_persisted"])
         self.assertEqual([f"{TEST_RUN_ID}-failed"], status["failed_source_ids"])
 
         async with self.driver.session(database=DATABASE) as session:
@@ -184,7 +192,7 @@ class EntityExtractionCoverageMCPIntegrationTests(unittest.IsolatedAsyncioTestCa
                 testRunId=TEST_RUN_ID,
             )
             record = await graph_result.single(strict=True)
-            self.assertEqual((1, 1), (record["entities"], record["persistedSources"]))
+            self.assertEqual((0, 0), (record["entities"], record["persistedSources"]))
 
         await self._cleanup_fixture()
 
@@ -234,6 +242,7 @@ class EntityExtractionCoverageMCPIntegrationTests(unittest.IsolatedAsyncioTestCa
                     "schema": str(SCHEMA_PATH),
                     "source_label": source_label,
                     "force": force,
+                    "property_policy": "overwrite",  # This fixture tests replacing a generation.
                     "batch_size": 1,
                 },
             )

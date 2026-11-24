@@ -198,6 +198,8 @@ class ExtractionMetadata(BaseModel):
     """Metadata stored on EXTRACTED_FROM relationships."""
 
     model: str = Field(..., description="LLM model used for extraction")
+    run_id: Optional[str] = None
+    fingerprint: Optional[str] = None
     timestamp: float = Field(default_factory=time.time, description="Unix timestamp")
     pass_number: int = Field(default=1, description="Pass number (1, 2, 3...)")
     pass_type: PassType = Field(default=PassType.FULL, description="Type of extraction pass")

@@ -1,0 +1,89 @@
+{
+  "reference": "synthetic-maintenance-v1",
+  "cases": {
+    "maintenance-1": {
+      "entities": {
+        "expected": 3,
+        "observed": 3,
+        "matched": 3,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "relationships": {
+        "expected": 2,
+        "observed": 2,
+        "matched": 2,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      }
+    },
+    "maintenance-2": {
+      "entities": {
+        "expected": 1,
+        "observed": 1,
+        "matched": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "relationships": {
+        "expected": 0,
+        "observed": 0,
+        "matched": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      }
+    },
+    "maintenance-3": {
+      "entities": {
+        "expected": 0,
+        "observed": 0,
+        "matched": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "relationships": {
+        "expected": 0,
+        "observed": 0,
+        "matched": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      }
+    }
+  },
+  "totals": {
+    "entities": {
+      "expected": 4,
+      "observed": 4,
+      "matched": 4,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "relationships": {
+      "expected": 2,
+      "observed": 2,
+      "matched": 2,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    }
+  },
+  "delta_vs_baseline": {
+    "entities": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "relationships": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    }
+  }
+}

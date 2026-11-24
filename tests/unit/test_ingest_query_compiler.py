@@ -89,6 +89,13 @@ class NodeQueryCompilerTests(unittest.TestCase):
         self.assertNotIn("record.personId", query)
         self.assertNotIn("record.displayName", query)
 
+    def test_structured_ownership_is_declared_and_reserved_properties_are_rejected(self):
+        query = compile_node_ingest_query(PERSON)
+        self.assertIn("node.__structuredSource = true", query)
+        self.assertIn("node.__structuredProperties", query)
+        with self.assertRaisesRegex(IngestModelError, 'reserved ownership'):
+            compile_node_ingest_query({**PERSON, 'properties': [{'name': '__extractionCreated'}]})
+
     def test_rejects_unsafe_model_and_source_identifiers(self) -> None:
         unsafe_cases = [
             {**PERSON, "label": "Person`) MATCH (n) DETACH DELETE n //"},
@@ -122,6 +129,11 @@ class RelationshipQueryCompilerTests(unittest.TestCase):
         self.assertIn("relationship.role = record.assignment_role", query)
         self.assertNotIn("SET end.", query)
         self.assertNotIn("SET end +=", query)
+
+    def test_relationship_ownership_is_declared(self):
+        query = compile_relationship_ingest_query(DATA_MODEL, ASSIGNED_TO)
+        self.assertIn("relationship.__structuredSource = true", query)
+        self.assertIn("relationship.__structuredProperties", query)
 
     def test_rejects_unsafe_relationship_type(self) -> None:
         relationship = {**ASSIGNED_TO, "type": "ASSIGNED_TO]->(x) DETACH DELETE x //"}

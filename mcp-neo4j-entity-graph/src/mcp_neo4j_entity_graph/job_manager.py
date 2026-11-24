@@ -41,6 +41,7 @@ class ExtractionJobInfo(BaseModel):
 
     # Parameters
     model: str = Field(..., description="LLM model used")
+    extraction_fingerprint: Optional[str] = None
     pass_type: PassType = Field(default=PassType.FULL)
     pass_number: int = Field(default=1)
 
@@ -121,6 +122,7 @@ class ExtractionJobInfo(BaseModel):
             "job_id": self.id,
             "status": self.status.value,
             "model": self.model,
+            "extraction_fingerprint": self.extraction_fingerprint,
             "pass_type": self.pass_type.value,
             "pass_number": self.pass_number,
             "elapsed_seconds": self.elapsed_seconds,

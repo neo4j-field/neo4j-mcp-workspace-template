@@ -72,6 +72,7 @@ def _neo4j_type_to_python(neo4j_type: str) -> str:
 def generate_extraction_models_code(
     schema: ExtractionSchema,
     normalizers: Optional[dict[str, list[NormalizerConfig]]] = None,
+    key_normalization: Optional[dict[str, str]] = None,
 ) -> str:
     """Generate Python code for extraction-ready Pydantic models.
 
@@ -83,10 +84,20 @@ def generate_extraction_models_code(
             ``compose_name_from_fields`` config. When ``None`` (default), only
             a basic whitespace-strip validator is emitted on each key property
             — this preserves backward compatibility with `convert_schema`.
+        key_normalization: File-based per-entity-label policy: strip (default)
+            or strip_lower. Relationship endpoints inherit the referenced key policy.
 
     Returns:
         Python source code as a string, ready to be written to a .py file
     """
+    key_normalization = key_normalization or {}
+    labels = {e.label for e in schema.entity_types}
+    if set(key_normalization) - labels:
+        raise ValueError("Unknown entity label in key_normalization")
+    if any(v not in {"strip", "strip_lower"} for v in key_normalization.values()):
+        raise ValueError("Key normalization must be strip or strip_lower")
+    if normalizers and key_normalization:
+        raise ValueError("Use ontology normalizers or key_normalization, not both")
     if normalizers is None:
         normalizers = {}
 
@@ -269,7 +280,11 @@ def generate_extraction_models_code(
                 lines.append("    @classmethod")
                 lines.append(f"    def _normalize_{_to_snake_case(et.key_property)}(cls, v: object) -> object:")
                 lines.append('        if isinstance(v, str):')
-                lines.append('            return v.strip()')
+                lines.append(
+                    '            return v.strip().lower()'
+                    if key_normalization.get(et.label) == 'strip_lower'
+                    else '            return v.strip()'
+                )
                 lines.append('        return v')
         else:
             # Backward-compat path (used by `convert_schema`): basic whitespace strip on key
@@ -278,7 +293,11 @@ def generate_extraction_models_code(
             lines.append("    @classmethod")
             lines.append(f"    def _normalize_{_to_snake_case(et.key_property)}(cls, v: object) -> object:")
             lines.append('        if isinstance(v, str):')
-            lines.append('            return v.strip()')
+            lines.append(
+                '            return v.strip().lower()'
+                if key_normalization.get(et.label) == 'strip_lower'
+                else '            return v.strip()'
+            )
             lines.append('        return v')
 
         lines.append("")
@@ -358,6 +377,23 @@ def generate_extraction_models_code(
                 f"    {prop.name}: {field_type} = "
                 f'Field(default=None, description="{desc}")'
             )
+
+        if not normalizers:
+            for endpoint_field, entity_label in [
+                (source_field, rel.source_entity), (target_field, rel.target_entity)
+            ]:
+                lines.append("")
+                lines.append(f'    @field_validator("{endpoint_field}", mode="before")')
+                lines.append("    @classmethod")
+                lines.append(f"    def _normalize_{endpoint_field}(cls, v: object) -> object:")
+                lines.append("        if isinstance(v, str):")
+                expression = (
+                    "v.strip().lower()"
+                    if key_normalization.get(entity_label) == "strip_lower"
+                    else "v.strip()"
+                )
+                lines.append(f"            return {expression}")
+                lines.append("        return v")
 
         # Validators for relationship endpoint keys + properties (only when normalizers provided)
         if normalizers:

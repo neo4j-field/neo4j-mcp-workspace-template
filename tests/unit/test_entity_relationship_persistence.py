@@ -6,7 +6,7 @@ import asyncio
 import json
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 
 from fastmcp import Client
 
@@ -29,6 +29,9 @@ class _FakeResult:
         self._rows = rows or []
         self._record = record
 
+    async def consume(self):
+        return None
+
     async def data(self):
         return self._rows
 
@@ -46,7 +49,16 @@ class _FakeSession:
     async def __aexit__(self, *_args):
         return None
 
+    async def execute_write(self, callback):
+        return await callback(self)
+
     async def run(self, query, **params):
+        if "AS legacy" in query:
+            return _FakeResult(record={"legacy": 0})
+        if "SET p.invalidated = true" in query:
+            return _FakeResult()
+        if "RETURN published" in query:
+            return _FakeResult(record={"published": len(params["sources"])})
         if "eligible_sources" in query:
             return _FakeResult(record={"eligible_sources": 2})
 
@@ -147,9 +159,23 @@ class EntityRelationshipPersistenceTests(unittest.IsolatedAsyncioTestCase):
         driver = _FakeDriver()
         server = create_mcp_server(driver)
 
-        with patch(
-            "mcp_neo4j_entity_graph.server.TextExtractor.extract_chunk",
-            new=self._stub_extract,
+        async def write_entity(_tx, _source_label, label, _key, entity, *_args):
+            driver.graph["nodes"].add((label, entity["key_value"]))
+            return str((label, entity["key_value"]))
+
+        async def write_relationship(_tx, _source_label, rel, *_args):
+            source = (rel["source_label"], rel["source_key_value"])
+            target = (rel["target_label"], rel["target_key_value"])
+            self.assertIn(source, driver.graph["nodes"])
+            self.assertIn(target, driver.graph["nodes"])
+            driver.graph["relationships"].add((source, rel["type"], target))
+
+        with (
+            patch("mcp_neo4j_entity_graph.server.TextExtractor.extract_chunk", new=self._stub_extract),
+            patch("mcp_neo4j_entity_graph.server.remove_contributions", AsyncMock(return_value=[])),
+            patch("mcp_neo4j_entity_graph.server.collect_unused_entities", AsyncMock()),
+            patch("mcp_neo4j_entity_graph.server.write_owned_entity", new=write_entity),
+            patch("mcp_neo4j_entity_graph.server.write_owned_relationship", new=write_relationship),
         ):
             async with Client(server) as client:
                 result = await client.call_tool(

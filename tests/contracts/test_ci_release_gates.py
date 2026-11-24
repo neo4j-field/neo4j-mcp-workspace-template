@@ -26,6 +26,8 @@ class CIReleaseGateContractTests(unittest.TestCase):
         self.assertRegex(workflow, r"(?m)^  unit-and-contract:$")
         self.assertRegex(workflow, r"(?m)^  neo4j-integration:$")
         self.assertRegex(workflow, r"(?m)^  desktop-smoke:$")
+        self.assertRegex(workflow, r"(?m)^  vector-fallback-integration:$")
+        self.assertIn("test_vector_index_fallback_mcp", workflow)
         self.assertIn("test_lexical_chunk_rebuild", workflow)
         self.assertIn("test_lexical_parser_modes", workflow)
         self.assertIn("test_structured_ingest_mcp", workflow)

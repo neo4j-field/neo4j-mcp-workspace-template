@@ -37,6 +37,9 @@ class _FakeResult:
         self._rows = rows or []
         self._record = record
 
+    async def consume(self):
+        return None
+
     async def data(self):
         return self._rows
 
@@ -54,15 +57,24 @@ class _FakeSession:
     async def __aexit__(self, *_args):
         return None
 
+    async def execute_write(self, callback):
+        return await callback(self)
+
     async def run(self, query, **params):
+        if "AS legacy" in query:
+            return _FakeResult(record={"legacy": 0})
+        if "SET p.invalidated = true" in query:
+            return _FakeResult()
+        if "RETURN published" in query:
+            return _FakeResult(record={"published": len(params["sources"])})
         if "eligible_sources" in query:
             return _FakeResult(record={"eligible_sources": 4})
 
         if f"MATCH (n:{self.source_label})" in query:
             if "WHERE (n.text IS NOT NULL OR n.imageBase64 IS NOT NULL)" not in query:
                 raise AssertionError("content eligibility must be grouped before skip filters")
-            if "AND NOT (n)<-[:EXTRACTED_FROM]-()" not in query:
-                raise AssertionError("force=false selection must retain the database skip filter")
+            if "completedFingerprints" not in query or "run.status = 'complete'" not in query:
+                raise AssertionError("selection must use successful durable completion evidence")
             is_page = self.source_label == "Bug003PageSource"
             return _FakeResult(
                 rows=[
@@ -259,7 +271,7 @@ class EntityExtractionCoverageTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(1, status["sources_succeeded"])
                 self.assertEqual(1, status["sources_empty"])
                 self.assertEqual(1, status["sources_failed"])
-                self.assertEqual(1, status["sources_persisted"])
+                self.assertEqual(0, status["sources_persisted"])
                 self.assertEqual([f"{TEST_RUN_ID}-failed"], status["failed_source_ids"])
 
 

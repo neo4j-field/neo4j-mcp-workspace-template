@@ -143,6 +143,10 @@ Use `convert_schema` from `neo4j-entity-graph` — **not** `export_to_pydantic_m
 - Input: the entity extraction sub-model (not the full unified model)
 - Set `output_path` to `outputs/schemas/<topic>_schema.py`
 - Output: `<topic>_schema.py` (Pydantic models used directly by extraction)
+- For CSV/PDF bridge keys, pass `key_normalization` to `convert_schema`, keyed by
+  entity label, e.g. `{"Product": "strip_lower", "Facility": "strip_lower"}`.
+  Use `strip_lower` only when CSV keys use that same policy. The default `strip`
+  preserves case. Generated relationship endpoints share the entity key policy.
 
 Review the Pydantic `.py` file. For each node's key property, verify or add a normalizing validator:
 
@@ -162,6 +166,26 @@ This prevents duplicate nodes from minor text variations (e.g. `"Aspirin"` vs `"
 Use `extract_entities` from `neo4j-entity-graph`:
 
 - Pass the Pydantic `.py` schema path from Step 5
+- Keep `property_policy="preserve_existing"` (the default) when merging onto CSV
+  nodes. Extraction fills missing properties and retains existing non-null values.
+  Use `overwrite` only when extraction is explicitly authoritative. Missing/null
+  fields withdraw prior owned assertions during replacement but do not delete
+  external/structured values. Inspect `EXTRACTED_FROM.conflictingProperties`
+  and `proposedPropertiesJson`; report conflicts even when the job succeeds.
+  The same policy now protects relationship properties. Inspect relationship
+  proposals/conflicts on EntityExtractionClaim records linked to the source.
+- Use a stable `extraction_scope` for a pipeline across schema/model revisions.
+  Its default is the absolute schema path (or ontology name). Different scopes
+  coexist; reuse the same scope when replacing prior output. `source_ids` can
+  restrict a rebuild to explicit Chunk/Page IDs.
+- Replacement removes only tracked contributions from selected sources in that
+  scope, then publishes new output atomically. Any source/model/write failure
+  leaves prior domain output intact; counters describe extraction attempts even
+  when no output was published.
+- If legacy EXTRACTED_FROM links lack ownership metadata, use a fresh source
+  namespace with `source_ids` explicitly selecting its new chunks, or a separately
+  reviewed migration. Do not tag old data as owned,
+  clear the database, or infer ownership from labels/ID prefixes.
 - Extraction is async — poll with `check_extraction_status` until complete
 - Report progress to the user: chunks processed, entities found so far
 

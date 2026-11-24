@@ -107,7 +107,7 @@ class OntologyWorkflowMCPIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 """
                 MATCH (n)
                 WHERE any(k IN keys(n) WHERE
-                          toString(n[k]) CONTAINS 'golden-e2e-20260910')
+                          toStringOrNull(n[k]) CONTAINS 'golden-e2e-20260910')
                    OR coalesce(n.id, '') STARTS WITH 'golden-e2e-20260910'
                    OR coalesce(n.sourceId, '') STARTS WITH 'golden-e2e-20260910'
                 WITH collect(n) AS nodes

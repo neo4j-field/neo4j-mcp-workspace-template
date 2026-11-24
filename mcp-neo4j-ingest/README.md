@@ -18,3 +18,14 @@ validated graph model and CSV execution:
 
 The pinned data-modeling server's ingest-query helpers are compatibility drafts;
 do not pass those drafts directly to `ingest_csv_into_neo4j`.
+
+
+### Structured ownership during extraction replacement
+
+The model-to-Cypher compiler marks imported nodes and relationships with
+`__structuredSource=true` and records imported property names in
+`__structuredProperties`. This lets the entity graph preserve structured data when
+withdrawing extraction contributions, even if CSV import follows extraction and
+asserts the same value. These are reserved metadata fields; model properties may
+not override them or `__extraction*` fields. Custom ingest queries retain their own
+semantics and must declare equivalent protection when taking ownership.

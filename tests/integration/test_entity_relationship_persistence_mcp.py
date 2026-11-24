@@ -70,6 +70,14 @@ class EntityRelationshipPersistenceMCPIntegrationTests(unittest.IsolatedAsyncioT
     async def _cleanup_fixture(self) -> None:
         async with self.driver.session(database=DATABASE) as session:
             await session.run(
+                "MATCH (claim:EntityExtractionClaim) WHERE claim.sourceLabel IN $labels DETACH DELETE claim",
+                labels=['Bug002Source'],
+            )
+            await session.run(
+                "MATCH (run:EntityExtractionRun) WHERE run.sourceLabel IN $labels DETACH DELETE run",
+                labels=['Bug002Source'],
+            )
+            await session.run(
                 """
                 MATCH (n)
                 WHERE n.testRunId = $testRunId
@@ -87,7 +95,7 @@ class EntityRelationshipPersistenceMCPIntegrationTests(unittest.IsolatedAsyncioT
             result = await session.run(
                 """
                 MATCH (n)
-                WHERE any(k IN keys(n) WHERE toString(n[k]) CONTAINS 'golden-e2e-20260910')
+                WHERE any(k IN keys(n) WHERE toStringOrNull(n[k]) CONTAINS 'golden-e2e-20260910')
                    OR coalesce(n.id, '') STARTS WITH 'golden-e2e-20260910'
                    OR coalesce(n.sourceId, '') STARTS WITH 'golden-e2e-20260910'
                 WITH collect(n) AS nodes
