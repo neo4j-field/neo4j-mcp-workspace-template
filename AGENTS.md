@@ -142,3 +142,9 @@ The full workflow is in `.agents/skills/develop-neo4j-graph/SKILL.md`.
 - **Do not** run `uv sync` in the workspace root — each server has its own `pyproject.toml`
 - **Do not** use relative paths in Cypher `LOAD CSV` or ingest tool calls — always use absolute paths
 - **Do not** commit `.env` or any generated MCP config file (`.codex/config.toml`, `.vibe/config.toml`, etc.) — they are gitignored
+
+---
+
+## 8. Pull requests
+
+Keep changes small and follow [CONTRIBUTING.md](CONTRIBUTING.md). Run `./scripts/verify-pr.sh` before opening a PR; CI runs the same check. Never commit secrets, generated configs, customer data, local outputs, or build artifacts. JM approves and merges; no auto-merge.
