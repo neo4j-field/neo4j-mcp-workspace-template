@@ -1,0 +1,1234 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://neo4j.com/docs/ontology-graph-spec/1.1.0/schema.json",
+    "title": "GraphModel",
+    "type": "object",
+    "properties": {
+        "schema": {
+            "type": "string",
+            "description": "Schema specification uri used."
+        },
+        "version": {
+            "type": "string",
+            "description": "User-defined version of this model document, e.g. a revision number or label."
+        },
+        "id": {
+            "type": "string",
+            "description": "Unique identifier of the model, typically a kebab-case version of the name, used for referencing."
+        },
+        "name": {
+            "type": "string",
+            "description": "Human readable name for the model."
+        },
+        "description": {
+            "type": "string",
+            "description": "Description of the model."
+        },
+        "nodes": {
+            "type": "object",
+            "description": "Node definitions keyed by node id.",
+            "additionalProperties": {
+                "$ref": "#/$defs/Node"
+            }
+        },
+        "relationships": {
+            "type": "object",
+            "description": "Relationship definitions keyed by relationship id.",
+            "additionalProperties": {
+                "$ref": "#/$defs/Relationship"
+            }
+        },
+        "extensions": {
+            "$ref": "#/$defs/GraphModelExtensions",
+            "description": "Extensions to the model: data source tables, mappings and external custom data."
+        }
+    },
+    "additionalProperties": false,
+    "required": [
+        "schema",
+        "version",
+        "id"
+    ],
+    "$defs": {
+        "Node": {
+            "type": "object",
+            "description": "A node of the graph.",
+            "properties": {
+                "label": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "description": "Shorthand for the identifying label. Expanded into labels when the model is decoded."
+                },
+                "labels": {
+                    "$ref": "#/$defs/Labels",
+                    "description": "Labels of the node."
+                },
+                "properties": {
+                    "type": "object",
+                    "description": "Properties of the node keyed by id.",
+                    "additionalProperties": {
+                        "$ref": "#/$defs/Property"
+                    }
+                },
+                "constraints": {
+                    "type": "object",
+                    "description": "Constraints on the node keyed by id.",
+                    "additionalProperties": {
+                        "$ref": "#/$defs/NodeConstraint"
+                    }
+                },
+                "extensions": {
+                    "$ref": "#/$defs/NodeExtensions",
+                    "description": "Extensions for the node."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Description of the node."
+                },
+                "aliases": {
+                    "type": "array",
+                    "description": "Alternative names for the node.",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "reference": {
+                    "type": "string",
+                    "description": "Reference or URI of an external resource describing the node."
+                }
+            },
+            "required": [],
+            "additionalProperties": false
+        },
+        "Labels": {
+            "type": "object",
+            "description": "The labels of a node.",
+            "properties": {
+                "identifier": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "description": "The label which identifies the node."
+                },
+                "implied": {
+                    "type": "array",
+                    "description": "Labels implied by the node in addition to the identifier.",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "optional": {
+                    "type": "array",
+                    "description": "Labels which may be present on the node but aren't required.",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "extensions": {
+                    "$ref": "#/$defs/LabelsExtensions",
+                    "description": "Extensions for the labels."
+                }
+            },
+            "required": [],
+            "additionalProperties": false
+        },
+        "LabelsExtensions": {
+            "type": "object",
+            "description": "Extensions for the labels of a node.",
+            "properties": {
+                "custom": {
+                    "type": "object",
+                    "description": "User-defined arbitrary data.",
+                    "additionalProperties": {}
+                }
+            },
+            "required": [],
+            "additionalProperties": false
+        },
+        "Property": {
+            "type": "object",
+            "description": "A property of a node or relationship.",
+            "properties": {
+                "type": {
+                    "$ref": "#/$defs/Neo4jType",
+                    "description": "Neo4j type of the property."
+                },
+                "dimension": {
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "description": "Dimension of the property when it holds a vector."
+                },
+                "must_exist": {
+                    "type": [
+                        "boolean",
+                        "null"
+                    ],
+                    "description": "Shorthand for an existence constraint. Expanded into constraints when the model is decoded."
+                },
+                "unique": {
+                    "type": [
+                        "boolean",
+                        "null"
+                    ],
+                    "description": "Shorthand for a uniqueness constraint. Expanded into constraints when the model is decoded."
+                },
+                "key": {
+                    "type": [
+                        "boolean",
+                        "null"
+                    ],
+                    "description": "Shorthand for a key constraint. Expanded into constraints when the model is decoded."
+                },
+                "extensions": {
+                    "$ref": "#/$defs/PropertyExtensions",
+                    "description": "Extensions for the property."
+                },
+                "name": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "description": "Name of the property in the database, when different from its id."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Description of the property."
+                },
+                "aliases": {
+                    "type": "array",
+                    "description": "Alternative names for the property.",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "reference": {
+                    "type": "string",
+                    "description": "Reference or URI of an external resource describing the property."
+                },
+                "pattern": {
+                    "type": "string",
+                    "description": "Pattern values of the property are expected to match."
+                },
+                "one_of": {
+                    "type": "array",
+                    "description": "Values the property is restricted to.",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            },
+            "required": [],
+            "additionalProperties": false
+        },
+        "Neo4jType": {
+            "type": "string",
+            "description": "A Neo4j property type.",
+            "enum": [
+                "ANY",
+                "LIST<ANY>",
+                "BOOLEAN",
+                "LIST<BOOLEAN>",
+                "DATE",
+                "LIST<DATE>",
+                "DURATION",
+                "LIST<DURATION>",
+                "FLOAT32",
+                "LIST<FLOAT32>",
+                "FLOAT",
+                "LIST<FLOAT>",
+                "INTEGER8",
+                "LIST<INTEGER8>",
+                "INTEGER16",
+                "LIST<INTEGER16>",
+                "INTEGER32",
+                "LIST<INTEGER32>",
+                "INTEGER",
+                "LIST<INTEGER>",
+                "LOCAL DATETIME",
+                "LIST<LOCAL DATETIME>",
+                "LOCAL TIME",
+                "LIST<LOCAL TIME>",
+                "POINT",
+                "LIST<POINT>",
+                "STRING",
+                "LIST<STRING>",
+                "VECTOR<FLOAT>",
+                "VECTOR<FLOAT32>",
+                "VECTOR<INTEGER>",
+                "VECTOR<INTEGER32>",
+                "VECTOR<INTEGER16>",
+                "VECTOR<INTEGER8>",
+                "ZONED DATETIME",
+                "LIST<ZONED DATETIME>",
+                "ZONED TIME",
+                "LIST<ZONED TIME>",
+                "UUID"
+            ]
+        },
+        "PropertyExtensions": {
+            "type": "object",
+            "description": "Extensions for a property.",
+            "properties": {
+                "custom": {
+                    "type": "object",
+                    "description": "User-defined arbitrary data.",
+                    "additionalProperties": {}
+                }
+            },
+            "required": [],
+            "additionalProperties": false
+        },
+        "NodeConstraint": {
+            "type": "object",
+            "description": "A constraint on a node.",
+            "properties": {
+                "type": {
+                    "$ref": "#/$defs/ConstraintType",
+                    "description": "Type of the constraint."
+                },
+                "properties": {
+                    "type": "array",
+                    "description": "Ids of the properties the constraint covers.",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "extensions": {
+                    "$ref": "#/$defs/NodeConstraintExtensions",
+                    "description": "Extensions for the constraint."
+                },
+                "name": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "description": "Name of the constraint in the database."
+                }
+            },
+            "required": [
+                "type",
+                "properties"
+            ],
+            "additionalProperties": false
+        },
+        "ConstraintType": {
+            "type": "string",
+            "description": "The type of a constraint.",
+            "enum": [
+                "EXISTS",
+                "KEY",
+                "PROPERTY_TYPE",
+                "UNIQUE"
+            ]
+        },
+        "NodeConstraintExtensions": {
+            "type": "object",
+            "description": "Extensions for a node constraint.",
+            "properties": {
+                "custom": {
+                    "type": "object",
+                    "description": "User-defined arbitrary data.",
+                    "additionalProperties": {}
+                }
+            },
+            "required": [],
+            "additionalProperties": false
+        },
+        "NodeExtensions": {
+            "type": "object",
+            "description": "Extensions for a node.",
+            "properties": {
+                "indexes": {
+                    "type": "object",
+                    "description": "Database indexes on this node keyed by id.",
+                    "additionalProperties": {
+                        "$ref": "#/$defs/NodeIndex"
+                    }
+                },
+                "display": {
+                    "oneOf": [
+                        {
+                            "type": "null"
+                        },
+                        {
+                            "$ref": "#/$defs/NodeDisplay"
+                        }
+                    ],
+                    "description": "Optional visual information of this node."
+                },
+                "custom": {
+                    "type": "object",
+                    "description": "User-defined arbitrary data.",
+                    "additionalProperties": {}
+                }
+            },
+            "required": [],
+            "additionalProperties": false
+        },
+        "NodeIndex": {
+            "type": "object",
+            "description": "An index on a node.",
+            "properties": {
+                "type": {
+                    "$ref": "#/$defs/IndexType",
+                    "description": "Type of the index."
+                },
+                "labels": {
+                    "type": "array",
+                    "description": "Labels the index covers.",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "properties": {
+                    "type": "array",
+                    "description": "Ids of the properties the index covers.",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "options": {
+                    "oneOf": [
+                        {
+                            "type": "null"
+                        },
+                        {
+                            "$ref": "#/$defs/IndexOption"
+                        }
+                    ],
+                    "description": "Configuration specific to the type of index."
+                },
+                "custom": {
+                    "type": "object",
+                    "description": "User-defined arbitrary data.",
+                    "additionalProperties": {}
+                },
+                "name": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "description": "Name of the index in the database."
+                }
+            },
+            "required": [
+                "type",
+                "labels",
+                "properties"
+            ],
+            "additionalProperties": false
+        },
+        "IndexType": {
+            "type": "string",
+            "description": "The type of an index.",
+            "enum": [
+                "FULLTEXT",
+                "POINT",
+                "RANGE",
+                "TEXT",
+                "VECTOR",
+                "LOOKUP"
+            ]
+        },
+        "IndexOption": {
+            "oneOf": [
+                {
+                    "$ref": "#/$defs/FULLTEXT"
+                },
+                {
+                    "$ref": "#/$defs/POINT"
+                },
+                {
+                    "$ref": "#/$defs/VECTOR"
+                }
+            ],
+            "description": "Configuration specific to the type of an index."
+        },
+        "FULLTEXT": {
+            "type": "object",
+            "description": "Configuration of a full-text index.",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "const": "FULLTEXT"
+                },
+                "fulltext.default_analyzer": {
+                    "type": "string",
+                    "description": "Analyzer used when the index doesn't specify one."
+                },
+                "fulltext.analyzer": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "description": "Analyzer used by the index."
+                },
+                "fulltext.eventually_consistent": {
+                    "type": "boolean",
+                    "description": "Whether the index is eventually consistent, updating asynchronously after transactions commit."
+                },
+                "fulltext.eventually_consistent_apply_parallelism": {
+                    "type": "integer",
+                    "description": "Number of threads used to apply updates to an eventually consistent index."
+                },
+                "fulltext.eventually_consistent_refresh_interval": {
+                    "type": "string",
+                    "description": "How often an eventually consistent index is refreshed."
+                },
+                "fulltext.eventually_consistent_refresh_parallelism": {
+                    "type": "integer",
+                    "description": "Number of threads used to refresh an eventually consistent index."
+                },
+                "fulltext.eventually_consistent_index_update_queue_max_length": {
+                    "type": "integer",
+                    "description": "Maximum number of pending updates queued for an eventually consistent index."
+                }
+            },
+            "required": [
+                "type"
+            ],
+            "additionalProperties": false
+        },
+        "POINT": {
+            "type": "object",
+            "description": "Configuration of a point index.",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "const": "POINT"
+                },
+                "spatial.cartesian.min": {
+                    "type": "array",
+                    "description": "Lower bounds of the 2D cartesian space.",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "spatial.cartesian.max": {
+                    "type": "array",
+                    "description": "Upper bounds of the 2D cartesian space.",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "spatial.cartesian-3d.min": {
+                    "type": "array",
+                    "description": "Lower bounds of the 3D cartesian space.",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "spatial.cartesian-3d.max": {
+                    "type": "array",
+                    "description": "Upper bounds of the 3D cartesian space.",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "spatial.wgs-84.min": {
+                    "type": "array",
+                    "description": "Lower bounds of the 2D WGS-84 space.",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "spatial.wgs-84.max": {
+                    "type": "array",
+                    "description": "Upper bounds of the 2D WGS-84 space.",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "spatial.wgs-84-3d.min": {
+                    "type": "array",
+                    "description": "Lower bounds of the 3D WGS-84 space.",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "spatial.wgs-84-3d.max": {
+                    "type": "array",
+                    "description": "Upper bounds of the 3D WGS-84 space.",
+                    "items": {
+                        "type": "number"
+                    }
+                }
+            },
+            "required": [
+                "type"
+            ],
+            "additionalProperties": false
+        },
+        "VECTOR": {
+            "type": "object",
+            "description": "Configuration of a vector index.",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "const": "VECTOR"
+                },
+                "vector.dimensions": {
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "description": "Number of dimensions of the indexed vectors."
+                },
+                "vector.similarity_function": {
+                    "type": "string",
+                    "description": "Function used to compare vectors, e.g. cosine or euclidean."
+                },
+                "vector.default_search_expansion_factor": {
+                    "type": [
+                        "number",
+                        "null"
+                    ],
+                    "description": "Default expansion factor applied to searches of the index."
+                },
+                "vector.quantization.enabled": {
+                    "type": "boolean",
+                    "description": "Whether vector quantization is enabled."
+                },
+                "vector.quantization.type": {
+                    "type": "string",
+                    "description": "Type of vector quantization used."
+                },
+                "vector.hnsw.m": {
+                    "type": "integer",
+                    "description": "Maximum number of connections per node in the HNSW graph."
+                },
+                "vector.hnsw.ef_construction": {
+                    "type": "integer",
+                    "description": "Number of nearest neighbours considered when building the HNSW graph."
+                }
+            },
+            "required": [
+                "type"
+            ],
+            "additionalProperties": false
+        },
+        "NodeDisplay": {
+            "type": "object",
+            "description": "Visual information for a node.",
+            "properties": {
+                "x": {
+                    "type": "number",
+                    "description": "Horizontal position."
+                },
+                "y": {
+                    "type": "number",
+                    "description": "Vertical position."
+                },
+                "colour": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "description": "Display colour of the node as a hex string, e.g. #FF8800."
+                },
+                "custom": {
+                    "type": "object",
+                    "description": "User-defined arbitrary data.",
+                    "additionalProperties": {}
+                }
+            },
+            "required": [
+                "x",
+                "y"
+            ],
+            "additionalProperties": false
+        },
+        "Relationship": {
+            "type": "object",
+            "description": "A relationship of the graph.",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "description": "Type of the relationship."
+                },
+                "from": {
+                    "$ref": "#/$defs/RelationshipTarget",
+                    "description": "The node the relationship starts at."
+                },
+                "to": {
+                    "$ref": "#/$defs/RelationshipTarget",
+                    "description": "The node the relationship ends at."
+                },
+                "properties": {
+                    "type": "object",
+                    "description": "Properties of the relationship keyed by id.",
+                    "additionalProperties": {
+                        "$ref": "#/$defs/Property"
+                    }
+                },
+                "constraints": {
+                    "type": "object",
+                    "description": "Constraints on the relationship keyed by id.",
+                    "additionalProperties": {
+                        "$ref": "#/$defs/RelationshipConstraint"
+                    }
+                },
+                "extensions": {
+                    "$ref": "#/$defs/RelationshipExtensions",
+                    "description": "Extensions for the relationship."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Description of the relationship."
+                },
+                "aliases": {
+                    "type": "array",
+                    "description": "Alternative names for the relationship.",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "reference": {
+                    "type": "string",
+                    "description": "Reference or URI of an external resource describing the relationship."
+                }
+            },
+            "required": [
+                "type",
+                "from",
+                "to"
+            ],
+            "additionalProperties": false
+        },
+        "RelationshipTarget": {
+            "type": "object",
+            "description": "One end of a relationship.",
+            "properties": {
+                "node": {
+                    "type": "string",
+                    "description": "Id of the node at this end."
+                },
+                "label": {
+                    "type": "string",
+                    "description": "Label of the node at this end."
+                },
+                "count": {
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "description": "Exact number of relationships per node at this end. Null when unconstrained."
+                },
+                "min_count": {
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "description": "Minimum number of relationships per node at this end."
+                },
+                "max_count": {
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "description": "Maximum number of relationships per node at this end."
+                }
+            },
+            "required": [],
+            "additionalProperties": false
+        },
+        "RelationshipConstraint": {
+            "type": "object",
+            "description": "A constraint on a relationship.",
+            "properties": {
+                "type": {
+                    "$ref": "#/$defs/ConstraintType",
+                    "description": "Type of the constraint."
+                },
+                "properties": {
+                    "type": "array",
+                    "description": "Ids of the properties the constraint covers.",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "extensions": {
+                    "$ref": "#/$defs/RelationshipConstraintExtensions",
+                    "description": "Extensions for the constraint."
+                },
+                "name": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "description": "Name of the constraint in the database."
+                }
+            },
+            "required": [
+                "type",
+                "properties"
+            ],
+            "additionalProperties": false
+        },
+        "RelationshipConstraintExtensions": {
+            "type": "object",
+            "description": "Extensions for a relationship constraint.",
+            "properties": {
+                "custom": {
+                    "type": "object",
+                    "description": "User-defined arbitrary data.",
+                    "additionalProperties": {}
+                }
+            },
+            "required": [],
+            "additionalProperties": false
+        },
+        "RelationshipExtensions": {
+            "type": "object",
+            "description": "Extensions for a relationship.",
+            "properties": {
+                "indexes": {
+                    "type": "object",
+                    "description": "Indexes on this relationship keyed by id.",
+                    "additionalProperties": {
+                        "$ref": "#/$defs/RelationshipIndex"
+                    }
+                },
+                "custom": {
+                    "type": "object",
+                    "description": "User-defined arbitrary data.",
+                    "additionalProperties": {}
+                }
+            },
+            "required": [],
+            "additionalProperties": false
+        },
+        "RelationshipIndex": {
+            "type": "object",
+            "description": "An index on a relationship.",
+            "properties": {
+                "type": {
+                    "$ref": "#/$defs/IndexType",
+                    "description": "Type of the index."
+                },
+                "properties": {
+                    "type": "array",
+                    "description": "Ids of the properties the index covers.",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "options": {
+                    "oneOf": [
+                        {
+                            "type": "null"
+                        },
+                        {
+                            "$ref": "#/$defs/IndexOption"
+                        }
+                    ],
+                    "description": "Configuration specific to the type of index."
+                },
+                "custom": {
+                    "type": "object",
+                    "description": "User-defined arbitrary data.",
+                    "additionalProperties": {}
+                },
+                "name": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "description": "Name of the index in the database."
+                }
+            },
+            "required": [
+                "type",
+                "properties"
+            ],
+            "additionalProperties": false
+        },
+        "GraphModelExtensions": {
+            "type": "object",
+            "description": "Extensions for a graph model.",
+            "properties": {
+                "data_source_tables": {
+                    "type": "object",
+                    "description": "Data source table schemas keyed by table id.",
+                    "additionalProperties": {
+                        "$ref": "#/$defs/Table"
+                    }
+                },
+                "data_source_mappings": {
+                    "type": "object",
+                    "description": "Sets of data source mappings from tables to nodes and relationships, often used for importing.",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/$defs/Mapping"
+                        }
+                    }
+                },
+                "custom": {
+                    "type": "object",
+                    "description": "User-defined arbitrary data.",
+                    "additionalProperties": {}
+                }
+            },
+            "required": [],
+            "additionalProperties": false
+        },
+        "Table": {
+            "type": "object",
+            "description": "A data source table schema.",
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "description": "Where the table's data comes from."
+                },
+                "columns": {
+                    "type": "array",
+                    "description": "Columns of the table in their source order.",
+                    "items": {
+                        "$ref": "#/$defs/TableColumn"
+                    }
+                },
+                "primary_keys": {
+                    "type": "array",
+                    "description": "Names of the columns making up the primary key.",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "foreign_keys": {
+                    "type": "object",
+                    "description": "Foreign keys of the table keyed by id.",
+                    "additionalProperties": {
+                        "$ref": "#/$defs/ForeignKey"
+                    }
+                },
+                "custom": {
+                    "type": "object",
+                    "description": "User-defined arbitrary data.",
+                    "additionalProperties": {}
+                }
+            },
+            "required": [
+                "source"
+            ],
+            "additionalProperties": false
+        },
+        "TableColumn": {
+            "type": "object",
+            "description": "A column of a data source table.",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Name of the column in the source. Unique within the table."
+                },
+                "type": {
+                    "type": "string",
+                    "description": "Data type of the column in the source."
+                },
+                "size": {
+                    "type": "integer",
+                    "description": "Size of the column."
+                },
+                "suggested": {
+                    "$ref": "#/$defs/Neo4jType",
+                    "description": "Neo4j type suggested for values of this column."
+                },
+                "supported": {
+                    "type": "array",
+                    "description": "Neo4j types values of this column can be converted to when using the import tool.",
+                    "items": {
+                        "$ref": "#/$defs/Neo4jType"
+                    }
+                },
+                "nullable": {
+                    "type": "boolean",
+                    "description": "Whether the column can hold null values."
+                },
+                "dimension": {
+                    "type": [
+                        "integer",
+                        "null"
+                    ],
+                    "description": "Dimension of the column when it holds vectors."
+                },
+                "custom": {
+                    "type": "object",
+                    "description": "User-defined arbitrary data.",
+                    "additionalProperties": {}
+                }
+            },
+            "required": [],
+            "additionalProperties": false
+        },
+        "ForeignKey": {
+            "type": "object",
+            "description": "A foreign key of a table.",
+            "properties": {
+                "columns": {
+                    "type": "array",
+                    "description": "Names of the columns in this table which make up the key.",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "references": {
+                    "$ref": "#/$defs/ForeignKeyReference",
+                    "description": "The table and columns the key refers to."
+                },
+                "custom": {
+                    "type": "object",
+                    "description": "User-defined arbitrary data.",
+                    "additionalProperties": {}
+                }
+            },
+            "required": [
+                "columns",
+                "references"
+            ],
+            "additionalProperties": false
+        },
+        "ForeignKeyReference": {
+            "type": "object",
+            "description": "The target of a foreign key.",
+            "properties": {
+                "table": {
+                    "type": "string",
+                    "description": "Id of the referenced table."
+                },
+                "columns": {
+                    "type": "array",
+                    "description": "Names of the referenced columns.",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "custom": {
+                    "type": "object",
+                    "description": "User-defined arbitrary data.",
+                    "additionalProperties": {}
+                }
+            },
+            "required": [
+                "table"
+            ],
+            "additionalProperties": false
+        },
+        "Mapping": {
+            "oneOf": [
+                {
+                    "$ref": "#/$defs/NODE"
+                },
+                {
+                    "$ref": "#/$defs/QUERY"
+                },
+                {
+                    "$ref": "#/$defs/RELATIONSHIP"
+                }
+            ],
+            "description": "A mapping from a data source table to the graph. Either a node, relationship or query mapping."
+        },
+        "NODE": {
+            "type": "object",
+            "description": "Maps rows of a table to nodes.",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "const": "NODE"
+                },
+                "node": {
+                    "type": "string",
+                    "description": "Id of the node being mapped."
+                },
+                "table": {
+                    "type": "string",
+                    "description": "Id of the source table."
+                },
+                "properties": {
+                    "type": "object",
+                    "description": "Mappings from property ids to source columns.",
+                    "additionalProperties": {
+                        "$ref": "#/$defs/PropertyMapping"
+                    }
+                },
+                "mode": {
+                    "$ref": "#/$defs/MappingMode",
+                    "description": "Whether nodes are merged with existing nodes or always created."
+                },
+                "match_label": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "description": "Label used to match existing nodes."
+                },
+                "key": {
+                    "type": "array",
+                    "description": "Ids of the properties which identify a node.",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "depends_on": {
+                    "type": "string",
+                    "description": "Id of another mapping in the same list which must be imported before this one. Empty when there is no dependency."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Optional id of this mapping, so other mappings in the same list can reference it in depends_on."
+                }
+            },
+            "required": [
+                "type",
+                "node",
+                "table",
+                "properties"
+            ],
+            "additionalProperties": false
+        },
+        "PropertyMapping": {
+            "type": "object",
+            "description": "Maps a property to a source column.",
+            "properties": {
+                "column": {
+                    "type": "string",
+                    "description": "Name of the source column."
+                }
+            },
+            "required": [
+                "column"
+            ],
+            "additionalProperties": false
+        },
+        "MappingMode": {
+            "type": "string",
+            "description": "Write approach used when importing data (merged into existing data or always created).",
+            "enum": [
+                "MERGE",
+                "CREATE"
+            ]
+        },
+        "QUERY": {
+            "type": "object",
+            "description": "Maps the results of a query run against a table.",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "const": "QUERY"
+                },
+                "table": {
+                    "type": "string",
+                    "description": "Id of the source table."
+                },
+                "query": {
+                    "type": "string",
+                    "description": "The query to run."
+                },
+                "depends_on": {
+                    "type": "string",
+                    "description": "Id of another mapping in the same list which must be imported before this one. Empty when there is no dependency."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Optional id of this mapping, so other mappings in the same list can reference it in depends_on."
+                }
+            },
+            "required": [
+                "type",
+                "table",
+                "query"
+            ],
+            "additionalProperties": false
+        },
+        "RELATIONSHIP": {
+            "type": "object",
+            "description": "Maps rows of a table to relationships.",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "const": "RELATIONSHIP"
+                },
+                "relationship": {
+                    "type": "string",
+                    "description": "Id of the relationship being mapped."
+                },
+                "table": {
+                    "type": "string",
+                    "description": "Id of the source table."
+                },
+                "from_node": {
+                    "$ref": "#/$defs/TargetMapping",
+                    "description": "How the start node of the relationship is matched."
+                },
+                "to_node": {
+                    "$ref": "#/$defs/TargetMapping",
+                    "description": "How the end node of the relationship is matched."
+                },
+                "match_label": {
+                    "type": [
+                        "string",
+                        "null"
+                    ],
+                    "description": "Label used to match existing relationships."
+                },
+                "properties": {
+                    "type": "object",
+                    "description": "Mappings from property ids to source columns.",
+                    "additionalProperties": {
+                        "$ref": "#/$defs/PropertyMapping"
+                    }
+                },
+                "mode": {
+                    "$ref": "#/$defs/MappingMode",
+                    "description": "Whether relationships are merged with existing relationships or always created."
+                },
+                "key": {
+                    "type": "array",
+                    "description": "Ids of the properties which identify a relationship.",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "depends_on": {
+                    "type": "string",
+                    "description": "Id of another mapping in the same list which must be imported before this one. Empty when there is no dependency."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Optional id of this mapping, so other mappings in the same list can reference it in depends_on."
+                }
+            },
+            "required": [
+                "type",
+                "relationship",
+                "table",
+                "from_node",
+                "to_node"
+            ],
+            "additionalProperties": false
+        },
+        "TargetMapping": {
+            "type": "object",
+            "description": "Identifies a node at one end of a mapped relationship.",
+            "properties": {
+                "label": {
+                    "type": "string",
+                    "description": "Label of the node."
+                },
+                "properties": {
+                    "type": "object",
+                    "description": "Mappings from property ids to source columns used to match the node.",
+                    "additionalProperties": {
+                        "$ref": "#/$defs/PropertyMapping"
+                    }
+                }
+            },
+            "required": [],
+            "additionalProperties": false
+        }
+    }
+}

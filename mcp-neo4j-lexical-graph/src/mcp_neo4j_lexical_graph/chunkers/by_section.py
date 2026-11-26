@@ -13,7 +13,13 @@ import structlog
 from neo4j import AsyncDriver
 
 from ..graph_reader import get_elements_for_document, get_sections_for_document
-from .base import BaseChunker, ChunkData, strip_base64_from_text
+from .base import (
+    BaseChunker,
+    ChunkData,
+    strip_base64_from_text,
+    attach_source_locators,
+    section_heading_paths,
+)
 
 logger = structlog.get_logger()
 
@@ -56,13 +62,15 @@ class BySectionChunker(BaseChunker):
 
             fallback = ByPageChunker()
             return await fallback.create_chunks(
-                driver, database, document_id,
+                driver,
+                database,
+                document_id,
                 include_tables_as_chunks=include_tables_as_chunks,
                 include_images_as_chunks=include_images_as_chunks,
                 prepend_section_heading=prepend_section_heading,
             )
 
-        for s in sections:
+        for s, context in zip(sections, section_heading_paths(sections)):
             heading = s.get("title", "")
             eids = s.get("elementIds") or []
             texts: list[str] = []
@@ -81,9 +89,14 @@ class BySectionChunker(BaseChunker):
                     clean_text = strip_base64_from_text(etext)
                     chunks.append(
                         ChunkData(
-                            id="", text=clean_text or etext, index=-1,
+                            id="",
+                            text=clean_text or etext,
+                            index=-1,
                             token_count=len(self.encoding.encode(clean_text or etext)),
-                            type="table", element_ids=[eid],
+                            type="table",
+                            element_ids=[eid],
+                            section_heading=heading,
+                            section_context=context,
                             image_base64=e.get("imageBase64") or "",
                             image_mime_type=e.get("imageMimeType") or "",
                             text_as_html=e.get("textAsHtml") or "",
@@ -94,9 +107,14 @@ class BySectionChunker(BaseChunker):
                     clean_text = strip_base64_from_text(etext)
                     chunks.append(
                         ChunkData(
-                            id="", text=clean_text or etext, index=-1,
+                            id="",
+                            text=clean_text or etext,
+                            index=-1,
                             token_count=len(self.encoding.encode(clean_text or etext)),
-                            type="image", element_ids=[eid],
+                            type="image",
+                            element_ids=[eid],
+                            section_heading=heading,
+                            section_context=context,
                             image_base64=e.get("imageBase64") or "",
                             image_mime_type=e.get("imageMimeType") or "",
                             text_as_html=e.get("textAsHtml") or "",
@@ -114,9 +132,14 @@ class BySectionChunker(BaseChunker):
                 )
                 chunks.append(
                     ChunkData(
-                        id="", text=full_text, index=-1,
+                        id="",
+                        text=full_text,
+                        index=-1,
                         token_count=len(self.encoding.encode(full_text)),
-                        type="text", element_ids=chunk_eids,
+                        type="text",
+                        element_ids=chunk_eids,
+                        section_heading=heading,
+                        section_context=context,
                     )
                 )
 
@@ -133,15 +156,21 @@ class BySectionChunker(BaseChunker):
             full_text = "\n\n".join(unassigned_texts)
             chunks.append(
                 ChunkData(
-                    id="", text=full_text, index=-1,
+                    id="",
+                    text=full_text,
+                    index=-1,
                     token_count=len(self.encoding.encode(full_text)),
-                    type="text", element_ids=unassigned_eids,
+                    type="text",
+                    element_ids=unassigned_eids,
                 )
             )
 
+        attach_source_locators(chunks, elements)
         for idx, c in enumerate(chunks):
             c.index = idx
             c.id = f"{document_id}_chunk_{idx:04d}"
 
-        logger.info("BySectionChunker: done", document_id=document_id, chunks=len(chunks))
+        logger.info(
+            "BySectionChunker: done", document_id=document_id, chunks=len(chunks)
+        )
         return chunks

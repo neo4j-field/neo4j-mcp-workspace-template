@@ -1,0 +1,1408 @@
+{
+  "date": "2026-11-26",
+  "purpose": "Read-only implementation inventory; includes committed and uncommitted release deltas. User input/output data, credentials, virtualenvs and generated MCP configs excluded. Report and this manifest excluded from own inventory.",
+  "workspace": {
+    "head": "5ab261337624a0c90f1de67af6f9c15ca2a29871",
+    "baseline": "9ed5a3be1ba946bf4f9f1a0adb26d99c78e6016f",
+    "branch": "stabilization",
+    "files": [
+      {
+        "path": ".agents/skills/develop-neo4j-graph/SKILL.md",
+        "state": "modified",
+        "sha256": "b8cdb7176a8e0f1e81609c9799665fa7a8768b829f54397e7df9763cab021df2"
+      },
+      {
+        "path": ".agents/skills/develop-neo4j-graph/references/CHATBOT_MODE.md",
+        "state": "modified",
+        "sha256": "eacaa230df1484f4073241df32608f53fe29277d166faa3defb32629362b0df0"
+      },
+      {
+        "path": ".agents/skills/develop-neo4j-graph/references/DOCLING_MODE.md",
+        "state": "modified",
+        "sha256": "c6e4ce889c05e0312d551aa703728ca2194b7878f0b188526908f5aca48f2599"
+      },
+      {
+        "path": ".agents/skills/develop-neo4j-graph/references/DOCUMENT_MODE.md",
+        "state": "untracked",
+        "sha256": "dcc82c86a756e0798707e20eec22a041986c42eeb2b973acaacf3bcf6da09deb"
+      },
+      {
+        "path": ".agents/skills/develop-neo4j-graph/references/EXTRACTION_INTERNALS.md",
+        "state": "untracked",
+        "sha256": "ac3d70fa3f25ba7dc3f01b21c80a314204ee23bfb4c09075cdcbbcead79e41bd"
+      },
+      {
+        "path": ".agents/skills/develop-neo4j-graph/references/HANDLE_STRUCTURED_DATA.md",
+        "state": "modified",
+        "sha256": "06b86a20098ebaec04b2cd741144c1dd8f308d3f928cf97c35b20f8c32b4c240"
+      },
+      {
+        "path": ".agents/skills/develop-neo4j-graph/references/HANDLE_UNSTRUCTURED_DATA.md",
+        "state": "modified",
+        "sha256": "a1a21416084823f90aaa67c88105a77bdf3a88adf5ee8e00c3e882f3ca068e82"
+      },
+      {
+        "path": ".agents/skills/develop-neo4j-graph/references/VLM_BLOCKS_MODE.md",
+        "state": "deleted",
+        "sha256": null
+      },
+      {
+        "path": ".env.example",
+        "state": "modified",
+        "sha256": "ac5b20033acd27222b95ea22a0bc833b1e979ccfa504d6b4b92b0cce67118a79"
+      },
+      {
+        "path": ".gitattributes",
+        "state": "modified",
+        "sha256": "547f59603028195ff9f8a87d04c4651551e8bd0d68f075257dfd549cd846b25b"
+      },
+      {
+        "path": ".github/workflows/publish-mcp-neo4j-entity-graph.yml",
+        "state": "modified",
+        "sha256": "2a504b8438761dc5c17888e92b509c9ac2087997bfa3f47940bd947caca54139"
+      },
+      {
+        "path": ".github/workflows/publish-mcp-neo4j-ingest.yml",
+        "state": "modified",
+        "sha256": "9f6e7879481262def6c028c69c98689a37da23f862a416747aae3d6e0d3c4c36"
+      },
+      {
+        "path": ".github/workflows/publish-mcp-neo4j-lexical-graph.yml",
+        "state": "modified",
+        "sha256": "a5b860fa45fc49ff62607c0ad5f0b50dca896ee4450a1aa677ed328db541ebf4"
+      },
+      {
+        "path": ".github/workflows/publish-mcp-neo4j-proxy.yml",
+        "state": "modified",
+        "sha256": "970bce2b76ba169cb28a498af5521fa3f9d99a8e3998ee5ed764c9976497a546"
+      },
+      {
+        "path": ".github/workflows/test-contracts.yml",
+        "state": "modified",
+        "sha256": "7d0e85efa7ac34c72f605814e01aa9ed6e881b6ff3768beef0284c83a2279e43"
+      },
+      {
+        "path": ".gitignore",
+        "state": "modified",
+        "sha256": "f52628ecedbcff5869c1b13dbd75d3a23a79808c57767762283e44cf28100daf"
+      },
+      {
+        "path": "AGENTS.md",
+        "state": "modified",
+        "sha256": "74a522579ad5db255888cc6074bce713ff040ca1ec6085df3fb266859d705b50"
+      },
+      {
+        "path": "BENCHMARK_TEST_PROMPT.md",
+        "state": "untracked",
+        "sha256": "06c48de40c014cdd8b0148b6ce0cc799b33f33d9fad5069e9a0c53a507aa5230"
+      },
+      {
+        "path": "CLAUDE.md",
+        "state": "modified",
+        "sha256": "0e8ddc64d78b0401bc7f3d8dda1135282686fcfc5c762551608bfa9600b7ccab"
+      },
+      {
+        "path": "FOLLOWUP_ACCEPTANCE_PROMPT.md",
+        "state": "untracked",
+        "sha256": "24575b96011ef4dcd84da31519bc3f91c20663aa75bc09b14a1b1e0ef93d6a64"
+      },
+      {
+        "path": "README.md",
+        "state": "modified",
+        "sha256": "b5e9b6aaf9b277d7a8d973106ad87ddeba16ae9b121a1a38f9e42985781f4fc5"
+      },
+      {
+        "path": "SMOKE_TEST_PROMPT.md",
+        "state": "untracked",
+        "sha256": "33ec0e499784b83063b065de6c04e1a56c2b2aaa9089f2f3421e9c7c943891ff"
+      },
+      {
+        "path": "data/documents/.gitkeep",
+        "state": "untracked",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "docs/CLAUDE_DESKTOP.md",
+        "state": "modified",
+        "sha256": "15e931c3058965d64d493d62c76d091448cd73cd83bff2f6d26ef15ee87e4db6"
+      },
+      {
+        "path": "docs/product/BACKLOG.md",
+        "state": "modified",
+        "sha256": "14e711d844e6165fb43337edb53ba6da130fdc84aadf4617a5199b413c4def4c"
+      },
+      {
+        "path": "docs/product/DECISIONS.md",
+        "state": "modified",
+        "sha256": "6a8378018e355979802198040240a816b438763f4619ddb8b85429deb833c9e2"
+      },
+      {
+        "path": "docs/product/FEATURE_CANDIDATES.md",
+        "state": "modified",
+        "sha256": "3d6b92a83ff7b3a8a9704aa9691d4e630eefcd7bd03b9f95e396b00a2e184457"
+      },
+      {
+        "path": "docs/product/PLANNING_AUDIT.md",
+        "state": "modified",
+        "sha256": "c81cebc059e8b9a0045786cc205924720485b79457997daa40216bdb4de5edad"
+      },
+      {
+        "path": "docs/product/README.md",
+        "state": "modified",
+        "sha256": "0474e121417d153de80c5ac18a24665a6e77c86a470fba839ad41e25decb7e7a"
+      },
+      {
+        "path": "docs/product/RELEASE_CHECKLIST.md",
+        "state": "untracked",
+        "sha256": "a8cee5400c6ea6c33b835cadb5e67a4f2aeb320497862252af7e534c59ca35be"
+      },
+      {
+        "path": "docs/product/ROADMAP.md",
+        "state": "modified",
+        "sha256": "4019419a71dd7d080c2e502d2d0b14e2fedd71624b835731c8b1fc51b07e8e97"
+      },
+      {
+        "path": "docs/product/SYNTHETIC_DATASET.md",
+        "state": "untracked",
+        "sha256": "9761b363de2ffa1b4e84bdc64a3deeea4985e18eb513eabd21eec8639a352df9"
+      },
+      {
+        "path": "docs/product/SYNTHETIC_DATASET_PLAN.md",
+        "state": "untracked",
+        "sha256": "f074a40eb0186f7cb0b4d4e6e8366e90de07a9a678930b2de1de2d61f332227d"
+      },
+      {
+        "path": "docs/product/adr/001-document-normalization.md",
+        "state": "modified",
+        "sha256": "a28bb682e2e613ac2e3ac52c806b13db531d93d573d6322401aec7e5fd915782"
+      },
+      {
+        "path": "docs/product/adr/002-workflow-completion.md",
+        "state": "modified",
+        "sha256": "bfec7022da5c5a2c28a06eed91be678e078772e823a182dd39bc925fea7f8a71"
+      },
+      {
+        "path": "docs/product/adr/003-graph-quality-workflow.md",
+        "state": "modified",
+        "sha256": "3e8592f9765b3f5bf9bd11c02f00ac05911622678a1d4659b33b6efe4949519b"
+      },
+      {
+        "path": "docs/product/adr/004-aip-experiment.md",
+        "state": "modified",
+        "sha256": "597129d3031d1e30c291ffe5351d2ede1edbf3d146d6fd9954bb7a0eb612adce"
+      },
+      {
+        "path": "docs/product/reviews/2026-09-10-bug-003-fix.md",
+        "state": "modified",
+        "sha256": "a71e5bb195509981baee2618325e6b181dab2b93a8e1deba29f330ad470429b4"
+      },
+      {
+        "path": "docs/product/reviews/2026-09-10-code-review.md",
+        "state": "modified",
+        "sha256": "749beb5d76ab29d4815a7da7b39c2af68747c2739d2977f6d65a42eb0f8386e9"
+      },
+      {
+        "path": "docs/product/reviews/2026-09-10-e2e-workflow-feedback.md",
+        "state": "modified",
+        "sha256": "824dcf50e131d5782e769729697ddc2ea15f9da2882bb4d40c51ebed048a00fa"
+      },
+      {
+        "path": "docs/product/reviews/2026-09-10-ingest-001-fix.md",
+        "state": "modified",
+        "sha256": "c974edf73f8c4b8bab9235af7933085698436d90c198fab726266334898966d7"
+      },
+      {
+        "path": "docs/product/reviews/2026-09-10-ingest-modeling-servers.md",
+        "state": "modified",
+        "sha256": "bf178bfc554510228b0e0b73a4b3d74ed2fe000e3ae4acd9d3a348a71fc969e1"
+      },
+      {
+        "path": "docs/product/reviews/2026-09-10-lex-001-fix.md",
+        "state": "modified",
+        "sha256": "f030868e0ed623c28482cf8de3e6cd3eeb3c5643e4b7b8f6a303a466702b5b99"
+      },
+      {
+        "path": "docs/product/reviews/2026-09-10-test-001-ci-release-gate.md",
+        "state": "modified",
+        "sha256": "4d506c4fb48b3018c15e3d6755247125caafa10a3fbd1a55f007f444160e928a"
+      },
+      {
+        "path": "docs/product/reviews/2026-09-10-test-002-regression-fixtures.md",
+        "state": "modified",
+        "sha256": "7b61219cb7f042e7218c9f7e9211b320cb18fa95d9296028b1244cfa6f130687"
+      },
+      {
+        "path": "docs/product/reviews/2026-09-10-wf-001-wf-003-fix.md",
+        "state": "modified",
+        "sha256": "4c3341a670827b10f46971b67ea9427c6716999971be515d299ef24af939d44d"
+      },
+      {
+        "path": "docs/product/reviews/2026-09-10-wf-004-fix.md",
+        "state": "modified",
+        "sha256": "3c43d9a5cf59fe07e00e03173da53717e7754c9248656a31870c1a4a82dddb93"
+      },
+      {
+        "path": "docs/product/reviews/2026-09-23-stabilization-audit.md",
+        "state": "modified",
+        "sha256": "38e1e55354aa815ac2f641789150864a19789736f332990619e2afbe98b7c13e"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-atomic-document-publication.md",
+        "state": "untracked",
+        "sha256": "23832826cb35bcde7a13874e2aa83559d78fd79cf9353e1f326f20e8c839e6ea"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-bridge-fixes.md",
+        "state": "modified",
+        "sha256": "b5b26ab83886a33823667dff3e5c02e3bed76620a81b06c931137bf8226f31bf"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-cold-setup.md",
+        "state": "untracked",
+        "sha256": "3679c1799b297e4fe59f16d4a1f838436f2c5179bdc58093a063f333138ca9ec"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-document-formats.md",
+        "state": "untracked",
+        "sha256": "d84a12c1cdcfe95b3ebc23c626161b20b9003b3f9ca8798d2b71016b242e53d2"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-embedding-identity.md",
+        "state": "untracked",
+        "sha256": "ab356d91d08dc6d2a29ffdf58614da7490419d2bdd2cadf5c531566faa165f0a"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-extraction-lifecycle.md",
+        "state": "modified",
+        "sha256": "9097c5e1c0de223498a3fb3570b69d661085c72a1d8a3615490b07cf5ba8ef53"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-format-options.md",
+        "state": "untracked",
+        "sha256": "77e057f6f8cc68533c836b8cfa6bb76ce4a42b3bf2e406a84744de30ded4c37b"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-golden-and-vector-verification.md",
+        "state": "modified",
+        "sha256": "ecc03c75ec1fc4c3c7b6542a0d15edb12afca0ae4ca639c4b26e78a2aae9e0a7"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-graphrag-retrieval.md",
+        "state": "untracked",
+        "sha256": "d1e78a737694285df970938d8e7fc4196b7aff3da5d3e6811bc7688dd9462102"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-lexical-boundaries.md",
+        "state": "untracked",
+        "sha256": "f39ad17b372bc914eb92b0baf5bbfc5bbde657b73995cf8c4f70de6be9df4b00"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-live-e2e-review.md",
+        "state": "modified",
+        "sha256": "df7a961dfa42b39c8e62a0a5e481d437854431224ce64cbaa4a16e90478ee002"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-live-release-acceptance.md",
+        "state": "untracked",
+        "sha256": "20d4d7ccbe87053b66770ea774585ae848786eaa7ef03d893f5453e9dc151db6"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-n1-n4.md",
+        "state": "untracked",
+        "sha256": "d44dbc25ca3f241fecc4f2cdc9a807370b9fc8cb76010bbca824bf167ee8fb0b"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-owned-replacement.md",
+        "state": "modified",
+        "sha256": "4d8f50fe18e9b455f4f04e386fa2e22e404ceb8df1f3be44dab094bcc2418dae"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-parallel-hardening.md",
+        "state": "untracked",
+        "sha256": "6d6af66c80eef493278e64e8d288b1a16d9655e6a6019028ab7b5ed0f2adc146"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-parser-surface.md",
+        "state": "untracked",
+        "sha256": "64aafd5b1e8fb1d64503ccb1abed6c09eee1445cdbd620c582762a29784bd8be"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-restricted-onboarding.md",
+        "state": "untracked",
+        "sha256": "2a5ade50eb7f10d868e513bd7f7dec7b0020bc861aecb5da1e7dd25bebb5ebd5"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-schema-validation.md",
+        "state": "untracked",
+        "sha256": "3cecec6c5eaf615ccf12ec09309c578e3b3586aa16d4fa379d9b710e5d600272"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-se-simplification.md",
+        "state": "untracked",
+        "sha256": "7cb46d7394a5e739bd16814f09c3092912125d72ccc23d90776fadfe5a4bf5e0"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-se-usability-followup.md",
+        "state": "untracked",
+        "sha256": "46e1d55b935c2fe83671a534d2ff9af55c91d3e1f6696be7201e9f3c6c7217e1"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-search-indexes.md",
+        "state": "untracked",
+        "sha256": "ff69b2d8cd74902307503b7d97d1cce31f9a81283c1811bf80b6c26c2692e934"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-setup-improvements.md",
+        "state": "untracked",
+        "sha256": "7157ebe472163e3d27527101f79d16f49aaa651fe08f284eea174194c2aac85d"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-stabilization-checkpoint.md",
+        "state": "modified",
+        "sha256": "19009f029eb90daac32b1b5743678e73c722f608a78dc2d30d7c016eeff2036e"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-synthetic-benchmark-live.md",
+        "state": "untracked",
+        "sha256": "c130e027c05c73966f842c54842c16253ce71e70a83fa67f5165ab1bdd488557"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-synthetic-dataset.md",
+        "state": "untracked",
+        "sha256": "9a29db20bcdac45fdfd3fd96ae5bf9c3b6f22b0cbeec17e38a35e99882e8208c"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-24-synthetic-smoke-live.md",
+        "state": "untracked",
+        "sha256": "31d46dfd98299f0392852a6006ec52db3f0672fee8f5841e7e2912171aec501e"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-26-claude-smoke-review.md",
+        "state": "untracked",
+        "sha256": "618e9852d72fe83b3fbfb7ce92d5f61c304c357fe346b593c4f46dd4a22d210d"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-26-docling-quality.md",
+        "state": "untracked",
+        "sha256": "54c759e216d2b60bc21285e81db4731c955913f1b927f02ab5593cc601838cea"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-26-legal-documents-review.md",
+        "state": "untracked",
+        "sha256": "b9d8d5771b32b3f9848d6939f42147f2b0a7b6879062a1d49bd9420a10e4a40e"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-26-pageindex-refresh.md",
+        "state": "untracked",
+        "sha256": "b25040a9565c351a164eb508ebfd1f389739c455aa1695dd67394697ede7fdfa"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-26-procedure-contract.md",
+        "state": "untracked",
+        "sha256": "1d35808fc6038ef75b7461a2cb1d6c0b963e51dbfc6cbb89e64e0ea8195f230f"
+      },
+      {
+        "path": "docs/product/reviews/2026-11-26-python-schema-ontology-export.md",
+        "state": "untracked",
+        "sha256": "ea975f1dcd55c1bc62b6ef94f740fb93dcd35cc47e0867a73854287fd6ad037e"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/README.md",
+        "state": "modified",
+        "sha256": "dbe1d14ad031ccbd1d5fa0ae5c8b5c71f9c8026e5a4535edd443d7d5609fff92"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/pyproject.toml",
+        "state": "modified",
+        "sha256": "949e4a57780bbdff2f8bf11ba09d0e0a8481e01bef196445aef68d13b6f07bbb"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/src/mcp_neo4j_entity_graph/base_extractor.py",
+        "state": "modified",
+        "sha256": "881821ebf2b6f7a5ce31b27b00489d63b23367ef2c57557b22100cfa445198ed"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/src/mcp_neo4j_entity_graph/extraction_identity.py",
+        "state": "modified",
+        "sha256": "f38145c70a8ac7c9109afdca7870295ea4fefd32d81580af76411713f5e0aab8"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/src/mcp_neo4j_entity_graph/job_manager.py",
+        "state": "modified",
+        "sha256": "47e096e6297146a169683f596dde497d626deb9e7749d037d2ffe12969d53cbd"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/src/mcp_neo4j_entity_graph/models.py",
+        "state": "modified",
+        "sha256": "f8fb335a1084acce1689dad78c851021754d3a276da5cc11d8be524532580c81"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/src/mcp_neo4j_entity_graph/normalizer_runtime.py",
+        "state": "modified",
+        "sha256": "ecb88f5c56418bd54db3fb7f6589ff8a4b86cd73c9c8ba33189ed3fc1ec74f33"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/src/mcp_neo4j_entity_graph/normalizer_templates.py",
+        "state": "modified",
+        "sha256": "0bf1e362b9abc00db7a5aa790be3adae483ff17563966a5c5aa085e490f2cb1a"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/src/mcp_neo4j_entity_graph/ontology_loader.py",
+        "state": "modified",
+        "sha256": "148ee9701ff9f0c812c39962d35e7ee0fc3d9042258a47a2188835a9f17cc876"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/src/mcp_neo4j_entity_graph/ontology_spec.py",
+        "state": "untracked",
+        "sha256": "65f849073ab72559732d33f355b53e6d9683638a5faab07acceda7c8a1cedfac"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/src/mcp_neo4j_entity_graph/ownership.py",
+        "state": "modified",
+        "sha256": "b91d5dffa3b6b3ba21dc85b5591f2cc50a5c68b829a19e5037d5b2eb0495b9df"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/src/mcp_neo4j_entity_graph/schema_generator.py",
+        "state": "modified",
+        "sha256": "7290db7cb80f499a5eb534903976eb2f428cda3f1a6c4d39e4f25bfd52a8610c"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/src/mcp_neo4j_entity_graph/schema_ontology_export.py",
+        "state": "untracked",
+        "sha256": "a29ea7babf83874ea7abd1f565775bd0b65de4354737d1476a5bcdef12b37a45"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/src/mcp_neo4j_entity_graph/schema_validation.py",
+        "state": "untracked",
+        "sha256": "5d62bd4adf18c8d04e9ecee42d58f94af4a380dfb3e64ae8cdbf53bb3798370a"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/src/mcp_neo4j_entity_graph/schemas/SOURCE.md",
+        "state": "untracked",
+        "sha256": "f851eb052573b641a226f8c0cc3b095208b667e95ff7ac6addde82a4094a8721"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/src/mcp_neo4j_entity_graph/schemas/ontology-graph-spec-1.1.0.json",
+        "state": "untracked",
+        "sha256": "c8fc0021c86b944a3090e7c5e084409970274fdabea79c8b715976fc09da78eb"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/src/mcp_neo4j_entity_graph/server.py",
+        "state": "modified",
+        "sha256": "98376071ef4d0819c218ddd6b861dbb27838f42f3f99871a228ef9ebaa36a999"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/src/mcp_neo4j_entity_graph/text_extractor.py",
+        "state": "modified",
+        "sha256": "952cdc3037f003e742a7c6474952e13956647cdb82efbf5cda130097523b3a15"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/src/mcp_neo4j_entity_graph/vlm_extractor.py",
+        "state": "modified",
+        "sha256": "f1e111bab77adce84c72c785601d3dbfc6c2d970da6e4bf4fae943bc03f36603"
+      },
+      {
+        "path": "mcp-neo4j-entity-graph/uv.lock",
+        "state": "modified",
+        "sha256": "848918ef8eb95c7a7446b7e78108694a7dceae571df2402f62e68886b725510f"
+      },
+      {
+        "path": "mcp-neo4j-ingest/README.md",
+        "state": "modified",
+        "sha256": "de77883a8f738baf7ccdff0ec324a0b13f914de613abc2e8a281b115f36fe94c"
+      },
+      {
+        "path": "mcp-neo4j-ingest/src/mcp_neo4j_ingest/__init__.py",
+        "state": "modified",
+        "sha256": "d60b9c4099dd555d76efa40b99e137336300e198068bd1cc12b31539a86c1a24"
+      },
+      {
+        "path": "mcp-neo4j-ingest/src/mcp_neo4j_ingest/csv_records.py",
+        "state": "untracked",
+        "sha256": "fe5ebb50a8e0248f2642058614badb205a40fb4e93ac7579573b1bedad1e32d1"
+      },
+      {
+        "path": "mcp-neo4j-ingest/src/mcp_neo4j_ingest/query_compiler.py",
+        "state": "modified",
+        "sha256": "3ec4f8bdc60af91fa9bc1d00809faf526764d483641d08cfc74bd794e156d055"
+      },
+      {
+        "path": "mcp-neo4j-ingest/src/mcp_neo4j_ingest/server.py",
+        "state": "modified",
+        "sha256": "e2c3d975135117f4e14ea3dff38ffc4870fe73212bc3c47606cc8bb1d8ad8dc8"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/README.md",
+        "state": "modified",
+        "sha256": "c1ba1fe0fa9a2cd0bf79985118f0d1676e482ef6b279c85e087e73f976752b01"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/docs/tools-chunking.md",
+        "state": "modified",
+        "sha256": "c9e7880554ae916d6eee06e3c309ad9213e354565303b6c02f4fbc0061abc095"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/docs/tools-embedding.md",
+        "state": "modified",
+        "sha256": "7cc417a921d7e92d8c1ba0825258067fb1cbcea90b6b9ed85c64c8fbc1e00464"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/docs/tools-graph-creation.md",
+        "state": "modified",
+        "sha256": "47e82eb1a69af1314ec57079b0faa9d53d658c51040a93742848220165b7a059"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/docs/tools-verification.md",
+        "state": "modified",
+        "sha256": "4581fba284ddd76844ba3ed680045e98b887703487b70c49a029c77d7648b88a"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/docs/tools-version-management.md",
+        "state": "modified",
+        "sha256": "eab65c040a1a1299a40e09442973257fba5a0c6c18521ddc555596b59c42861e"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/pyproject.toml",
+        "state": "modified",
+        "sha256": "d1ac6bb0b56e83ce10c668259fd4ed729e7c16308ca81ff0d7c7563857725ee5"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/chunkers/base.py",
+        "state": "modified",
+        "sha256": "188672dd21e85f211f459d65da3666b6c7c7ed8ad85ea3c879aea85aa74000b4"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/chunkers/by_page.py",
+        "state": "modified",
+        "sha256": "03ac607608c8390d8c27314ee731044151e5a94873e90dd1ed9b1db149f041ca"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/chunkers/by_section.py",
+        "state": "modified",
+        "sha256": "9fc5f7c0d079c25eda1d1bc29addbd161df0d77675415db6f6252c6815ca950f"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/chunkers/structured.py",
+        "state": "modified",
+        "sha256": "b1e81c19218748a407cedb27fe4b59dfb07f260074d675e1690d0f1791e9e644"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/chunkers/token_window.py",
+        "state": "modified",
+        "sha256": "71e8bf54ede97884a9bb5106615636cf0676b6bb571272c44b36d731f0ecba9d"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/embedder.py",
+        "state": "modified",
+        "sha256": "9fa1241f894817b67ac607ab2020bc2f2f9f5c95319b3b946a4227c8a7e9c133"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/embedding_identity.py",
+        "state": "untracked",
+        "sha256": "3383e66cb096e55774c3e597e7714da02429eeeb7c11daa3f6e9006dc99de82b"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/graph_reader.py",
+        "state": "modified",
+        "sha256": "8c24e3ea353b1e2ee26962807f78f0781cf7c672c54cfd8ec4fde5e1462fd704"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/graph_writer.py",
+        "state": "modified",
+        "sha256": "d53dc832285b6aa85c1a9b5657a91d5e06949b65f4bba9cef23f4bc184b1b9b2"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/input_formats.py",
+        "state": "untracked",
+        "sha256": "d6774c512ab867aef54256dd9247e5b26475a7f15cfae278b15f4e2c014e4a9d"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/job_manager.py",
+        "state": "modified",
+        "sha256": "6f22a3de544268922ff88810d448bfad749862a446e469c2cdf38eb621144977"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/metadata.py",
+        "state": "untracked",
+        "sha256": "c53da8a82ac482c1cd9d9e0d6ae3e6d4a194158b41370c2fcee1ba657d5823c0"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/models.py",
+        "state": "modified",
+        "sha256": "d50ec8a970f7fec3814edd781a7f98db5ba7406216389bef3bd719001fbf6662"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/parsers/__init__.py",
+        "state": "modified",
+        "sha256": "f3b3e00f605acd688e73e20e3f90bb162122eb4df595195c2575353d955a4cf8"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/parsers/base.py",
+        "state": "modified",
+        "sha256": "70e7c7d3abf3cd0dce45c3e3a936368c0cc6311fb5741cf1cd9295e3f07daa40"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/parsers/conversion_validation.py",
+        "state": "untracked",
+        "sha256": "3e3d89ffa4a436e603ddf7bfa46b85534751a691f2598778ab561750b5a92b77"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/parsers/docling_parser.py",
+        "state": "modified",
+        "sha256": "e77b444c844b204d6d0469ad84aee78ee969f6d22f4e2b444a9a33fd0ed2acb8"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/parsers/structured_document.py",
+        "state": "untracked",
+        "sha256": "31c95e328e9fad8296d95b8e251f7a5620ef729632ebb3e8563b77676392e6a6"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/parsers/vlm_blocks.py",
+        "state": "deleted",
+        "sha256": null
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/postprocessing/description_generator.py",
+        "state": "modified",
+        "sha256": "039308f41b5d5e5e4b43f8b1aebc465288457d3d0a58b58fb5e00b9e4d8f6c15"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/postprocessing/section_hierarchy.py",
+        "state": "modified",
+        "sha256": "f2f3a3045eb4cec9856accb6d2724c044b0fa99017fa56b09fcc8817cb25cf43"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/server.py",
+        "state": "modified",
+        "sha256": "5ab5192f86360e18e742806ce98554e9c6ebf5dd3a6d05c1ccc905827c65b7b7"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/src/mcp_neo4j_lexical_graph/worker.py",
+        "state": "modified",
+        "sha256": "a45c3fa2e59f83470723999df4acb82fe875b1d9e3450371e7b519746fc2f6f5"
+      },
+      {
+        "path": "mcp-neo4j-lexical-graph/uv.lock",
+        "state": "modified",
+        "sha256": "2742572aa789ca0a998d9a6a0b88389a9310acb955f8c37bf2adad3427b6ac33"
+      },
+      {
+        "path": "mcp-neo4j-proxy/pyproject.toml",
+        "state": "modified",
+        "sha256": "f83c7fde1cb757bf94ab742c8259ae36b7674843208ae8cf9c79c90b95acda0f"
+      },
+      {
+        "path": "mcp-neo4j-proxy/src/mcp_neo4j_proxy/__init__.py",
+        "state": "modified",
+        "sha256": "3b91fa4232e86ee23cd5a3ef2f1535cb2a4ebbc6a2f4d3a55f9fa5375ec5282f"
+      },
+      {
+        "path": "mcp-neo4j-proxy/src/mcp_neo4j_proxy/graphrag_revision.txt",
+        "state": "untracked",
+        "sha256": "f6c5bb0a6c70e78c8c35af5d1a8991c82ee537e9745b5605926f179f4eea9ba7"
+      },
+      {
+        "path": "mcp-neo4j-proxy/src/mcp_neo4j_proxy/report_contracts.yaml",
+        "state": "modified",
+        "sha256": "7166aeaf918137cf11808ac5e9907602c96453d79fad2e1885c3f132222e89f9"
+      },
+      {
+        "path": "mcp-neo4j-proxy/src/mcp_neo4j_proxy/report_validator.py",
+        "state": "modified",
+        "sha256": "eed040d03ea66b5409f1cd505836018fb36843e6394c26f6422803f6067751e0"
+      },
+      {
+        "path": "mcp-neo4j-proxy/src/mcp_neo4j_proxy/server.py",
+        "state": "modified",
+        "sha256": "64cbee47350f325a776521a9967cba276c5a45a2eb8077e005b47945cadd1124"
+      },
+      {
+        "path": "mcp-neo4j-proxy/uv.lock",
+        "state": "modified",
+        "sha256": "3a0b9de2c16a5b3a0f7c3014f3918ffccad8bf6215143bee17a2e55d2ad520f9"
+      },
+      {
+        "path": "neo4j-mcp-workspace-dxt/manifest.json",
+        "state": "modified",
+        "sha256": "ce43265ec3a8bcef2a8b221a175b4f9e1cd5ae4617f792d708a09f10f7714db0"
+      },
+      {
+        "path": "scripts/check-extraction-model.py",
+        "state": "untracked",
+        "sha256": "810f4c6cef696fdab9ed5fbaecaf75829d8497ad8b63406556358f5babea8fb8"
+      },
+      {
+        "path": "scripts/generate-synthetic-dataset.sh",
+        "state": "untracked",
+        "sha256": "90581ee50f6fa75db8a12fee425b2b79e3d095cabe284d7332657ad6e78862d9"
+      },
+      {
+        "path": "scripts/setup-dependencies.sh",
+        "state": "untracked",
+        "sha256": "d4f1eb631724deca13db74f6d820da21479eefa0b127e3d981cb196aecf0baf3"
+      },
+      {
+        "path": "scripts/setup-env.py",
+        "state": "untracked",
+        "sha256": "a3c7239189072277bfc20960a7c5b657d2366b2966ff8f7137a0f09042163977"
+      },
+      {
+        "path": "scripts/setup-graphrag.sh",
+        "state": "untracked",
+        "sha256": "3a678a3e43beed6ee197d5748aa02c461b46f81c02808c5fbc1b7f4dc8fe69cd"
+      },
+      {
+        "path": "setup.sh",
+        "state": "modified",
+        "sha256": "1e025ef594e57c632947bf5c861943261ca3042a611c7a3817a05051c05e694a"
+      },
+      {
+        "path": "skills/build-ontology-driven-graph/SKILL.md",
+        "state": "modified",
+        "sha256": "2d7e83538190721647d684b0d586ff750228c684ea913af4e7206b85a7b55055"
+      },
+      {
+        "path": "skills/build-ontology-driven-graph/references/common-pitfalls.md",
+        "state": "modified",
+        "sha256": "8136d50a6dd6ee93b31c633b2fe7f74488b7889d87c9733f48d0b84b4605d128"
+      },
+      {
+        "path": "skills/build-ontology-driven-graph/references/lexical-graph-pipeline.md",
+        "state": "modified",
+        "sha256": "9715c7fa09f7f07551d3faa4fd4cbdfae2858752440fb3edaebaec09eebaa320"
+      },
+      {
+        "path": "tests/contracts/test_ci_release_gates.py",
+        "state": "modified",
+        "sha256": "428e50710216c9b84104937ceec6d6b92d81b68d81bfaf2bf124f8986eb1f76e"
+      },
+      {
+        "path": "tests/contracts/test_desktop_lexical_runtime_contract.py",
+        "state": "modified",
+        "sha256": "cc7617723005e3805ec8d98dd41b3f6b1188856ac0576c4f3fe782ecb8d9ffe7"
+      },
+      {
+        "path": "tests/contracts/test_workflow_contracts.py",
+        "state": "modified",
+        "sha256": "e9a1b490a9a1c3d033602deeecb6899c2e102b03b0ea06f793fa059a785c4620"
+      },
+      {
+        "path": "tests/fixtures/desktop/wf001_wf003_smoke.pdf",
+        "state": "modified",
+        "sha256": "07647bb24923ac934e0aa40ac36af83854fad88a40c27123c52c7bb62c38c330"
+      },
+      {
+        "path": "tests/fixtures/documents/literal.txt",
+        "state": "untracked",
+        "sha256": "9e947b35a9c8200d7f72ae8f3111c92b0d44a6bb154923acbd38ed5b7ea067ba"
+      },
+      {
+        "path": "tests/fixtures/documents/native.html",
+        "state": "untracked",
+        "sha256": "1b1d1da31eac9cdfdc15dfff79d5fd1e2f98646af2a03ada74f468440654dd0f"
+      },
+      {
+        "path": "tests/fixtures/documents/native.md",
+        "state": "untracked",
+        "sha256": "4130e1b1aa8103db72559615a3234f886e806d8c435fd23e56d8e3ebbe344443"
+      },
+      {
+        "path": "tests/fixtures/entity/bug002_schema.py",
+        "state": "modified",
+        "sha256": "1cbb8219232ea79b206e78a7e7f6751bdcbae797f6e719b746f97f421a290a2c"
+      },
+      {
+        "path": "tests/fixtures/entity/bug003_schema.py",
+        "state": "modified",
+        "sha256": "e92f960c13e7d9434bbfca7afc27e4ea2198721fc4905820acf4f1fe5e385617"
+      },
+      {
+        "path": "tests/fixtures/lexical/page_accounting_cases.json",
+        "state": "modified",
+        "sha256": "32fa72b5249702794635066faa608cf93ee6d46394fcca4519ceaeed51619310"
+      },
+      {
+        "path": "tests/fixtures/ontology/wf004_ontology.cypher",
+        "state": "modified",
+        "sha256": "4ea33a8a65fbe80721113f27b73a36cfcdaa4e507a186a613abd812f6812718d"
+      },
+      {
+        "path": "tests/fixtures/reports/invalid_chatbot.md",
+        "state": "modified",
+        "sha256": "a4807cc399034631a2e4c4431db2c978961f4d2a6b3d05521066cc1cdd9f17c5"
+      },
+      {
+        "path": "tests/fixtures/reports/valid_analytical_pdf.md",
+        "state": "modified",
+        "sha256": "00abc906174d672cf9a14c4c1e4d8f0507475c7631a08eaa025c6943b390ba09"
+      },
+      {
+        "path": "tests/fixtures/reports/valid_chatbot.md",
+        "state": "modified",
+        "sha256": "b369db9706096b36ff2d7ca15f3669a6b177d59257baaaf71d7fce2e2fbc6393"
+      },
+      {
+        "path": "tests/fixtures/structured/contract_assignments.csv",
+        "state": "modified",
+        "sha256": "146db19028fa2ba981493c85117a617b0bb1761d98c370d517cc982a59487276"
+      },
+      {
+        "path": "tests/fixtures/structured/contract_people.csv",
+        "state": "modified",
+        "sha256": "a6b8311302486b9aa3ebcbedd7610d777813fb877b194e3f09ef223637dd6052"
+      },
+      {
+        "path": "tests/fixtures/structured/contract_projects.csv",
+        "state": "modified",
+        "sha256": "814a704209259e2e4fbb2cde9cbf4304827e6527963717e64ee42f7a64dbddef"
+      },
+      {
+        "path": "tests/fixtures/structured/ingest001_assignments.csv",
+        "state": "modified",
+        "sha256": "135a300a6881b9e6f3bdb9ddb7ae2932e8f475b5bb541cc7714f23511b797a71"
+      },
+      {
+        "path": "tests/fixtures/structured/ingest001_people.csv",
+        "state": "modified",
+        "sha256": "a28ced1ce39f347a199d21bb3ce38ab03edb760a2d7f1bdf2a6178ed9b30bd4e"
+      },
+      {
+        "path": "tests/fixtures/structured/ingest001_projects.csv",
+        "state": "modified",
+        "sha256": "c29e6c80cea82945eb4eb682361ca37aa73467b974f5ea2257d5e5a693e72a87"
+      },
+      {
+        "path": "tests/golden/README.md",
+        "state": "modified",
+        "sha256": "d7d867049bccf649255914ed216038118c8227384708d4f995ac08c94a9111af"
+      },
+      {
+        "path": "tests/golden/baselines/20261124_gpt6_luna_baseline.json",
+        "state": "modified",
+        "sha256": "4ce59c7c69020c9ae18e10efd2933baf14dd712c4d8422eb04ec69fe55dbc324"
+      },
+      {
+        "path": "tests/golden/baselines/20261124_gpt6_luna_repeat.json",
+        "state": "modified",
+        "sha256": "996b5e4ce8d161fa63dd3b5a338e0b6e6f8bf50581f246c704f8329068c4b69c"
+      },
+      {
+        "path": "tests/golden/baselines/20261124_gpt6_luna_scores.json",
+        "state": "modified",
+        "sha256": "c909f4f8d07b3c3795f2e6f8660c42d5ace088932316d13649c383ed2791d846"
+      },
+      {
+        "path": "tests/golden/evaluate.py",
+        "state": "modified",
+        "sha256": "459fd300a509e1b99fda9e268999aedf9e0076965c073e1060bd9d5f8b1d6096"
+      },
+      {
+        "path": "tests/golden/run_extraction.py",
+        "state": "modified",
+        "sha256": "015dd9ea35662952d0b4447caed7833f7cf61b08eee04930a90356960fee88a2"
+      },
+      {
+        "path": "tests/golden/synthetic_extraction.json",
+        "state": "modified",
+        "sha256": "3b3197a4fcc2e8aaa3e64642a4a1e7e57f011a283a6dfd8c93d611cd87b8fd3d"
+      },
+      {
+        "path": "tests/golden/synthetic_schema.py",
+        "state": "modified",
+        "sha256": "87906297da30c34e860816fea2acd5ad211069e4e445ad6592bd9033eea55f33"
+      },
+      {
+        "path": "tests/golden/test_evaluate.py",
+        "state": "modified",
+        "sha256": "3827a7ecec4c54800103a4457d41b1882e5260cc50cdff761d95499055795ae0"
+      },
+      {
+        "path": "tests/golden/test_run_extraction.py",
+        "state": "modified",
+        "sha256": "21992b15aba6e320e57cd7264b7794cf4712f46cc5bdff85fdac248aa6f9c52f"
+      },
+      {
+        "path": "tests/golden/test_schema.py",
+        "state": "modified",
+        "sha256": "d6954bd14b887ceee824ba20daaa2d7ceaa2b031ad9d9985ba35649e324e50e9"
+      },
+      {
+        "path": "tests/integration/test_bridge_property_policy_mcp.py",
+        "state": "modified",
+        "sha256": "1d591c5a622dc2168698bf6f4550abccb436c9cb7fb0769baba638a965320750"
+      },
+      {
+        "path": "tests/integration/test_desktop_lexical_smoke_mcp.py",
+        "state": "modified",
+        "sha256": "400e5309b0af5403cf8244dc7650fb5a4d3629a666a70cb0fb304bf1b3ee7fcc"
+      },
+      {
+        "path": "tests/integration/test_docling_native_hierarchy_mcp.py",
+        "state": "untracked",
+        "sha256": "46e602ce994f73292f55d42ed28567c39365a542a5d7904e0b51e92c8f3c66be"
+      },
+      {
+        "path": "tests/integration/test_document_formats_mcp.py",
+        "state": "untracked",
+        "sha256": "1767be0ddfb54d74ae1d11a1d2f655c9fa6b4fe9443eb9a43a01f361bb18629c"
+      },
+      {
+        "path": "tests/integration/test_document_version_publication_mcp.py",
+        "state": "untracked",
+        "sha256": "4cc741b0763f0d3bead95d405342fbb263d2ce98b8ba90ed2551e45b384a1a97"
+      },
+      {
+        "path": "tests/integration/test_embedding_identity_mcp.py",
+        "state": "untracked",
+        "sha256": "7e92c0fcc0cc204a302e03634661dfb995af86ca57ac3938bd723a9be07bcd3e"
+      },
+      {
+        "path": "tests/integration/test_embedding_privileges_mcp.py",
+        "state": "untracked",
+        "sha256": "27626a3793ac2cb655927827ba0808c54baafbe55e0ff01f07ce9912ead258c2"
+      },
+      {
+        "path": "tests/integration/test_entity_extraction_coverage_mcp.py",
+        "state": "modified",
+        "sha256": "3d929c323dac772e5c143bc4aaca32c0e9c233832dba6a1e5ec09e8ea46394b3"
+      },
+      {
+        "path": "tests/integration/test_entity_relationship_persistence_mcp.py",
+        "state": "modified",
+        "sha256": "b63d686534eebe78f22c4770dc09ba521ababcced02063c3b3c65dba3b245b1f"
+      },
+      {
+        "path": "tests/integration/test_extraction_completion_mcp.py",
+        "state": "modified",
+        "sha256": "12db7dcecdeb56c06b6f7c242396da309302ed5634f65777dd0537b90024d4da"
+      },
+      {
+        "path": "tests/integration/test_fulltext_index_failures_mcp.py",
+        "state": "untracked",
+        "sha256": "d683a3b326bb44a8f40e3a3535599a8352f21299461cbf72fcefa3ab9f0c0628"
+      },
+      {
+        "path": "tests/integration/test_lexical_chunk_rebuild_mcp.py",
+        "state": "modified",
+        "sha256": "c589fdbb824d6468514e651df7450f065842bf6371c0ab6143a5e2b7e316fa20"
+      },
+      {
+        "path": "tests/integration/test_lexical_navigation_metadata_mcp.py",
+        "state": "untracked",
+        "sha256": "8e9345ad53c8c9de01ed56875f8c4b1f194ee73b778552ee66a831024ef362a8"
+      },
+      {
+        "path": "tests/integration/test_lexical_page_accounting_mcp.py",
+        "state": "modified",
+        "sha256": "13a5e77adbe27aee069cfba312a3d297f5ed5b98c307002a29be14cfbc72ffbb"
+      },
+      {
+        "path": "tests/integration/test_lexical_write_boundaries_mcp.py",
+        "state": "untracked",
+        "sha256": "424a2c404ac96eba8e7594841b363c4f1296e51196a9e645908888b03675f7a9"
+      },
+      {
+        "path": "tests/integration/test_ontology_spec_mcp.py",
+        "state": "untracked",
+        "sha256": "88bcfdd27a858d2b988bff9234a86edfd43b7a8be93bc0a0c930733375d8441f"
+      },
+      {
+        "path": "tests/integration/test_ontology_workflow_mcp.py",
+        "state": "modified",
+        "sha256": "15d35b6fbd1bf2d79c34856e061c7b6bb4d88a0125d113a18d4c6e703e3f128c"
+      },
+      {
+        "path": "tests/integration/test_owned_replacement_mcp.py",
+        "state": "modified",
+        "sha256": "c5820f2bef389061e24c73397746567cee1f709cc59324d759e7e14519777231"
+      },
+      {
+        "path": "tests/integration/test_pageless_lexical_flow_mcp.py",
+        "state": "untracked",
+        "sha256": "0a4759b18156039ea1dbcb090d81d3e2d1b1f19f8c46b9729f845332cea046c6"
+      },
+      {
+        "path": "tests/integration/test_schema_preflight_mcp.py",
+        "state": "untracked",
+        "sha256": "e3f599140119659db3c7416dace3b87e4b482108ecb42993e876a4c098052cc8"
+      },
+      {
+        "path": "tests/integration/test_structured_ingest_mcp.py",
+        "state": "modified",
+        "sha256": "816e757892ce5a56e75bb6931c327b9af361463f3a14cb5abd807fa6bc5505c2"
+      },
+      {
+        "path": "tests/integration/test_vector_index_fallback_mcp.py",
+        "state": "modified",
+        "sha256": "6a444a424723b33d612da3697fe2818f6b1519ac5b6f1d207b26982c6a443321"
+      },
+      {
+        "path": "tests/report_validation/test_report_validator.py",
+        "state": "modified",
+        "sha256": "2e2ceff33088c18d473e345d93904781742753c48f6486406ef42d0fca8a2337"
+      },
+      {
+        "path": "tests/skill-evals/README.md",
+        "state": "modified",
+        "sha256": "519c540ecee63567cf156b9300d49bbabfec2b19ca10fc211786c02735539c27"
+      },
+      {
+        "path": "tests/skill-evals/scenarios.yaml",
+        "state": "modified",
+        "sha256": "db7bb244033b2019934c8dedef34a8ada030bf54b9754e9e6fea18c81c189158"
+      },
+      {
+        "path": "tests/synthetic/LICENSE",
+        "state": "untracked",
+        "sha256": "0246d6439c5d3fba39283069e662d3bbddfa260c43af870891f213a5d451beb0"
+      },
+      {
+        "path": "tests/synthetic/__init__.py",
+        "state": "untracked",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "tests/synthetic/canonical.py",
+        "state": "untracked",
+        "sha256": "b7623de1902728f44b862c99a77cb9a75742ead5dd8dcbc1342798401bc0f94a"
+      },
+      {
+        "path": "tests/synthetic/check_ingest.py",
+        "state": "untracked",
+        "sha256": "5d7529da9bcd127069a193e83027ca578f6260e64900ba7be24a54028ebce3f1"
+      },
+      {
+        "path": "tests/synthetic/docling_quality.py",
+        "state": "untracked",
+        "sha256": "8a7d5d6375a76c7b908aa88ae445c966868e427198f556bc89621f37e7bbdb50"
+      },
+      {
+        "path": "tests/synthetic/generate.py",
+        "state": "untracked",
+        "sha256": "813f3b8499e6a01832b864829b0954e259509333e30ccf427558c327ccceaeef"
+      },
+      {
+        "path": "tests/synthetic/procedure_contract.py",
+        "state": "untracked",
+        "sha256": "729996ff4639e6bc8d990e211e2d977e4676e8b5a2e848170b5cdf218b3a4683"
+      },
+      {
+        "path": "tests/synthetic/renderers.py",
+        "state": "untracked",
+        "sha256": "fa735b0d8c1b766677eb247ff5874e33681960ff2e7550840a982b7f3ebaeb28"
+      },
+      {
+        "path": "tests/synthetic/schemas.py",
+        "state": "untracked",
+        "sha256": "effb20b2efd15ad3f055236ebbea9feb7f30423fe60221696e45024690933739"
+      },
+      {
+        "path": "tests/synthetic/test_canonical.py",
+        "state": "untracked",
+        "sha256": "a71d702973277aa4fec7d5287842d4820993c8e52215a62eacdc3da5a37b8733"
+      },
+      {
+        "path": "tests/synthetic/test_docling_quality.py",
+        "state": "untracked",
+        "sha256": "b97eaf965654eec78fe9cbd1e183644fb13d918b713a89dbadab417a63550dc4"
+      },
+      {
+        "path": "tests/synthetic/test_generate.py",
+        "state": "untracked",
+        "sha256": "97d809322d3dcfe5ce571556fcfeb14e8d2f8fb32a6bcabec04375c3aaddae0c"
+      },
+      {
+        "path": "tests/synthetic/test_procedure_contract.py",
+        "state": "untracked",
+        "sha256": "01eb129838f87ebf577d19dfe9235c0a9b8d9ace576f58f636ba176415cfe024"
+      },
+      {
+        "path": "tests/synthetic/test_renderers.py",
+        "state": "untracked",
+        "sha256": "d020f31555acc4f0106ecfb722acb919dddf0df46f34b80ae9d960c5ed1164b5"
+      },
+      {
+        "path": "tests/synthetic/test_schemas.py",
+        "state": "untracked",
+        "sha256": "0ec7482011c841b9e6a67c49427c01687f5fc3e88d1fe82a39c4426a2b4112b4"
+      },
+      {
+        "path": "tests/synthetic/validate.py",
+        "state": "untracked",
+        "sha256": "e776be96cfdc364673f5b3d062a0a99c91b2298dc922c98bb39f53577910735e"
+      },
+      {
+        "path": "tests/unit/test_bridge_normalization.py",
+        "state": "modified",
+        "sha256": "0c4533832f77b924b5f8307e130ea2205c077682fb5c4499eb5d97937f4da163"
+      },
+      {
+        "path": "tests/unit/test_docling_conversion_completion.py",
+        "state": "untracked",
+        "sha256": "175853f3d5060286ae268a7f086d8a84e62e29979fc637e52b6eb5d92c30e040"
+      },
+      {
+        "path": "tests/unit/test_docling_native_hierarchy.py",
+        "state": "untracked",
+        "sha256": "984ec7df7e23b0129b2d983772c99c022baed54864dcf07b039595e9c23461a3"
+      },
+      {
+        "path": "tests/unit/test_document_input_routing.py",
+        "state": "untracked",
+        "sha256": "c5e68c5df66314892751791f6eee23536aa971fbb0e5486997bfce2ff5b0f6e2"
+      },
+      {
+        "path": "tests/unit/test_document_version_publication.py",
+        "state": "untracked",
+        "sha256": "1489898a358cb49c1e26f989110f2d9657263dd36e618b0fab1408589ce71463"
+      },
+      {
+        "path": "tests/unit/test_embedding_identity.py",
+        "state": "untracked",
+        "sha256": "95370bd5856ada534f03587b6c3a13d9298f715545c1a55640b90d6a8ac61d07"
+      },
+      {
+        "path": "tests/unit/test_entity_extraction_coverage.py",
+        "state": "modified",
+        "sha256": "4a007085021c28f9b36a7483e79ef9d285658101a274ce88037b2dd07fc1b64b"
+      },
+      {
+        "path": "tests/unit/test_entity_relationship_persistence.py",
+        "state": "modified",
+        "sha256": "f09cd0bf12899c887c8fda01c88d1f1bb265f3c2cb083d14167987e8cdef31a9"
+      },
+      {
+        "path": "tests/unit/test_extraction_identity.py",
+        "state": "modified",
+        "sha256": "bd093431d55d8ee67c447533ab5c74438b082d177173a049a8e79f8db816255e"
+      },
+      {
+        "path": "tests/unit/test_fulltext_index_failures.py",
+        "state": "untracked",
+        "sha256": "73f2fc662ef713b1549811daa21ae6c071b01d50717e7abb51e12dd04158c21d"
+      },
+      {
+        "path": "tests/unit/test_gpt6_extraction_params.py",
+        "state": "modified",
+        "sha256": "bb7ae744c243241ab96e4fb8bd602c82d1a1cdf9bea2763a3c520038962b6955"
+      },
+      {
+        "path": "tests/unit/test_ingest_csv_nulls.py",
+        "state": "untracked",
+        "sha256": "ab1049f8714f2bef9107b2dcdc883a71a665bb5922f8d3b944bd0c5f08711ec4"
+      },
+      {
+        "path": "tests/unit/test_ingest_query_compiler.py",
+        "state": "modified",
+        "sha256": "03ae5834b50c332846095365b0c104c0f289e3d3dea0f26edec31296481210ff"
+      },
+      {
+        "path": "tests/unit/test_lexical_chunk_rebuild.py",
+        "state": "modified",
+        "sha256": "5eb0183239de5801ad8b0d615e92b2ef4a0550f977bc3b8b9ab5ba36a2f6ffa9"
+      },
+      {
+        "path": "tests/unit/test_lexical_page_accounting.py",
+        "state": "modified",
+        "sha256": "e0f105c074d8cbfb7923d8d936f60211061e2deed66fbfd0ef422e34c9758025"
+      },
+      {
+        "path": "tests/unit/test_lexical_parser_modes.py",
+        "state": "modified",
+        "sha256": "64cd585bddbf43512eef912631687bc887720cf81a49469a96933a431e4d8097"
+      },
+      {
+        "path": "tests/unit/test_lexical_write_boundaries.py",
+        "state": "untracked",
+        "sha256": "b2a5bc62e6f67193b0fc404b198ba6fc5cf447bec5dfafb4cf5c81786a0087e4"
+      },
+      {
+        "path": "tests/unit/test_ontology_spec.py",
+        "state": "untracked",
+        "sha256": "0bf6cda9326498c068e51529b63a54c96ad24ed62c8c199382cad3ffc8e36e7d"
+      },
+      {
+        "path": "tests/unit/test_pageless_lexical_flow.py",
+        "state": "untracked",
+        "sha256": "4a0583735615f75ce851c38359b349aab87594c96c3928fddb74bf4626d330fc"
+      },
+      {
+        "path": "tests/unit/test_schema_ontology_export.py",
+        "state": "untracked",
+        "sha256": "4b4cb2a0b8956b5e71bf0f78373fe4e86de625c990c2e6698532a52bd86a5776"
+      },
+      {
+        "path": "tests/unit/test_schema_preflight.py",
+        "state": "untracked",
+        "sha256": "156bcffd443e93a55cd3e0205b3bbc4ea6018ce5932a2e6c3063007e11293af5"
+      },
+      {
+        "path": "tests/unit/test_setup_dependencies.py",
+        "state": "untracked",
+        "sha256": "b9c5806bab007dcc60bb0912fe96d0ae4234a5ffddec557d8c1308fbeb5f7bbe"
+      },
+      {
+        "path": "tests/unit/test_setup_env.py",
+        "state": "untracked",
+        "sha256": "027cac5381ecbdcbe6484c2f360898f6f2d4aea27f0057c404d41c4752560160"
+      },
+      {
+        "path": "tests/unit/test_setup_graphrag.py",
+        "state": "untracked",
+        "sha256": "13cf22c96dc692633d8766a12fc39916e141ca3a58e9980c43ecfdc80c46307e"
+      },
+      {
+        "path": "tests/unit/test_setup_model_preflight.py",
+        "state": "untracked",
+        "sha256": "a0a406508ad25e340a22c9c0abfe3c49bef542eb91fbdad98c94cf02160ecfe7"
+      },
+      {
+        "path": "tests/unit/test_structured_document_parser.py",
+        "state": "untracked",
+        "sha256": "ecd70c03f5f33418d373d3e1678fcc26a71471d57a252c624f9edd8a60b9025e"
+      },
+      {
+        "path": "tests/unit/test_vector_index_fallback.py",
+        "state": "modified",
+        "sha256": "9effb4bff8c5e8a2236ef1c7bd7ace26e67c363a5c0d08194afa6a7ad644cb4c"
+      }
+    ]
+  },
+  "graphrag": {
+    "head": "0867f08b8eba58c328e4699b1323fa9661aa6b10",
+    "baseline": "19ed03d5cd4f889a58bd4fe35dc66bb64854f7d8",
+    "branch": "codex/graphrag-tree-ontology",
+    "files": [
+      {
+        "path": ".github/workflows/publish.yml",
+        "state": "modified",
+        "sha256": "aad184da27aeed1c5439d259e689078111796b1c7b93505b3b74b46b59fbdd0d"
+      },
+      {
+        "path": ".github/workflows/test.yml",
+        "state": "modified",
+        "sha256": "a161aec6f5d57bc9a4abc3fae8b8b3fc88eaeedc601c1042a7aa2358f7f32653"
+      },
+      {
+        "path": "CHANGELOG.md",
+        "state": "modified",
+        "sha256": "0396bd476e9d5e28ce654a54ae0cc7815a7c4c3a0f4581e977328dc5b80b0904"
+      },
+      {
+        "path": "README.md",
+        "state": "modified",
+        "sha256": "2b60a1b495e92e99c8fd6bbb5b0737261180ee1168d7ecc850ddcc39cc753e27"
+      },
+      {
+        "path": "pyproject.toml",
+        "state": "modified",
+        "sha256": "ad0184a5d517f9a0c6b51c8b2db033bdb74b569adae5df188d1f226f2f6a17e8"
+      },
+      {
+        "path": "src/mcp_neo4j_graphrag/__init__.py",
+        "state": "modified",
+        "sha256": "b3018524ebe058efc15214b754a506aaf1a5e3dbbe85c8c00d08a78e989fda0f"
+      },
+      {
+        "path": "src/mcp_neo4j_graphrag/ontology.py",
+        "state": "modified",
+        "sha256": "125978ca0b47dbeb455b5cee4ddf2f6e9cfeacf72f59a96e97fca3ecb543b9c2"
+      },
+      {
+        "path": "src/mcp_neo4j_graphrag/pageindex.py",
+        "state": "modified",
+        "sha256": "e9d9ad31422ee87a851f0cf106ed08132aeba1f8cb58740f5c2de8e298314c5b"
+      },
+      {
+        "path": "src/mcp_neo4j_graphrag/schemas/SOURCE.md",
+        "state": "modified",
+        "sha256": "f851eb052573b641a226f8c0cc3b095208b667e95ff7ac6addde82a4094a8721"
+      },
+      {
+        "path": "src/mcp_neo4j_graphrag/schemas/ontology-graph-spec-1.1.0.json",
+        "state": "modified",
+        "sha256": "c8fc0021c86b944a3090e7c5e084409970274fdabea79c8b715976fc09da78eb"
+      },
+      {
+        "path": "src/mcp_neo4j_graphrag/search_indexes.py",
+        "state": "modified",
+        "sha256": "b646a7cc6e914014cd3b7612e6b97ea3065293d4f8daf088421cc2df55e3685b"
+      },
+      {
+        "path": "src/mcp_neo4j_graphrag/server.py",
+        "state": "modified",
+        "sha256": "afd2de0279ea5e983f20880751aba2861ccfaf1f5dde7c664b68625742ca31c1"
+      },
+      {
+        "path": "src/mcp_neo4j_graphrag/utils.py",
+        "state": "modified",
+        "sha256": "e3fc4f1528aeb7c88d7f50d726464fd5b5d76a93943f5ffdcc97be253ba1e166"
+      },
+      {
+        "path": "tests/__init__.py",
+        "state": "modified",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "tests/integration/__init__.py",
+        "state": "modified",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "tests/integration/test_graphrag_ontology_mcp.py",
+        "state": "modified",
+        "sha256": "9bff59223ecd11bd7b178384a760abe700d5dbd5879d9bc3dd5d756f129195b8"
+      },
+      {
+        "path": "tests/integration/test_pageindex_refresh_mcp.py",
+        "state": "modified",
+        "sha256": "dc5b4ba0202b6da80e191362ef204c450ff66cb9d405823954dfd78cce1ec531"
+      },
+      {
+        "path": "tests/integration/test_pageindex_retrieval_mcp.py",
+        "state": "modified",
+        "sha256": "af7c6d2ddaa4b947a034e65e5865e068b25254e74e20bb10435fbb7a8da46e46"
+      },
+      {
+        "path": "tests/integration/test_search_indexes_mcp.py",
+        "state": "modified",
+        "sha256": "e39ff89a87c3d507e99bd4e593e10decd55933966b6ae314ee61f12b9dcf63e9"
+      },
+      {
+        "path": "tests/unit/__init__.py",
+        "state": "modified",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "tests/unit/test_graphrag_configuration.py",
+        "state": "modified",
+        "sha256": "99fd79877c33705a5f3d36943b976fc7c3f53ff4e9beac070169bfc746c52315"
+      },
+      {
+        "path": "tests/unit/test_graphrag_ontology.py",
+        "state": "modified",
+        "sha256": "a0bede8469785d338eb5b1e5681338251e0461427722114d3812eb4705dd040b"
+      },
+      {
+        "path": "tests/unit/test_pageindex_refresh.py",
+        "state": "modified",
+        "sha256": "ef61963f4f1ef125aad612bf3b0dd977bd2fc34015c70303402a99fc9c09eebc"
+      },
+      {
+        "path": "tests/unit/test_pageindex_retrieval.py",
+        "state": "modified",
+        "sha256": "2cb1560880f034adc29bb8c921bf72b222c36f84625091f34ef59e3dd9856a19"
+      },
+      {
+        "path": "tests/unit/test_search_indexes.py",
+        "state": "modified",
+        "sha256": "d422daf7e6a0aa9da486a4c38b386e8cd116deb05e9647bca059586fdfe7a1fc"
+      },
+      {
+        "path": "uv.lock",
+        "state": "modified",
+        "sha256": "1e7e3d3edf198303053ac7a7a09254ecc4858bb831ec843438ec45387350fb76"
+      }
+    ]
+  }
+}

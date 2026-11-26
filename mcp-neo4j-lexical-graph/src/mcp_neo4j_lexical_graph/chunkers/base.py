@@ -46,6 +46,8 @@ class ChunkData:
     image_base64: str = ""
     image_mime_type: str = ""
     text_as_html: str = ""
+    source_format: str | None = None
+    source_anchors: list[str] = field(default_factory=list)
 
 
 class BaseChunker(ABC):
@@ -75,3 +77,41 @@ class BaseChunker(ABC):
             Ordered list of ChunkData objects.
         """
         ...
+
+
+def section_heading_paths(sections: list[dict[str, Any]]) -> list[str]:
+    """Full paths for sections in reading order, using semantic heading levels."""
+    stack: list[dict[str, Any]] = []
+    paths: list[str] = []
+    for section in sections:
+        level = section.get("level") or 1
+        while stack and (stack[-1].get("level") or 1) >= level:
+            stack.pop()
+        stack.append(section)
+        paths.append(
+            " > ".join(part.get("title", "") for part in stack if part.get("title"))
+        )
+    return paths
+
+
+def attach_source_locators(
+    chunks: list[ChunkData], elements: list[dict[str, Any]]
+) -> None:
+    """Keep parser-provided locators for elements actually contributing to each chunk.
+
+    Locators are source anchors, never fabricated PDF page numbers. PDF readers
+    without the new fields remain compatible and leave these fields empty.
+    """
+    by_id = {element["id"]: element for element in elements}
+    formats = {
+        element["sourceFormat"] for element in elements if element.get("sourceFormat")
+    }
+    for chunk in chunks:
+        chunk.source_format = next(iter(formats)) if len(formats) == 1 else None
+        chunk.source_anchors = list(
+            dict.fromkeys(
+                by_id[eid]["sourceAnchor"]
+                for eid in chunk.element_ids
+                if eid in by_id and by_id[eid].get("sourceAnchor")
+            )
+        )

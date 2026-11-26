@@ -16,6 +16,9 @@ import multiprocessing
 from pathlib import Path
 from typing import Any, Optional
 
+from .metadata import normalize_document_metadata
+from .input_formats import mode_for_path
+
 # Progress message types (sent as tuples on the queue):
 #   ("parsing_start", source_id, page_count)
 #   ("parsing_done", source_id, element_count, section_count)
@@ -63,10 +66,9 @@ def parse_single_pdf(
     # docling params
     skip_furniture: bool = True,
     extract_sections: bool = True,
-    extract_toc: bool = True,
     store_page_images: bool = False,
 ) -> dict[str, Any]:
-    """Parse a single PDF in a subprocess.
+    """Parse one supported document in a subprocess.
 
     Returns a dict with:
       - "parse_mode": the mode used
@@ -79,8 +81,18 @@ def parse_single_pdf(
     _send_progress(progress_queue, "parsing_start", source_id, 0)
 
     path = Path(pdf_path)
-    metadata = metadata or {}
+    metadata = normalize_document_metadata(metadata)
+    parse_mode = mode_for_path(path, parse_mode)
 
+    if parse_mode == "document":
+        from .parsers.structured_document import StructuredDocumentParser
+        parsed = StructuredDocumentParser().parse(
+            pdf_path, source_id, version=version, metadata=metadata,
+            extract_sections=extract_sections, extract_images=extract_images,
+            extract_tables=extract_tables,
+        )
+        _send_progress(progress_queue, "parsing_done", source_id, len(parsed.elements), len(parsed.sections))
+        return {"parse_mode": "document", "parsed_doc": parsed.model_dump()}
     if parse_mode == "pymupdf":
         return _parse_pymupdf(
             pdf_path=pdf_path,
@@ -112,15 +124,10 @@ def parse_single_pdf(
             dpi=dpi,
             skip_furniture=skip_furniture,
             extract_sections=extract_sections,
-            extract_toc=extract_toc,
             store_page_images=store_page_images,
             progress_queue=progress_queue,
         )
-    elif parse_mode == "vlm_blocks":
-        raise RuntimeError(
-            "vlm_blocks mode is async-only and cannot run in a subprocess worker. "
-            "It is handled directly in the server's event loop."
-        )
+
     else:
         raise ValueError(f"Unknown parse_mode: {parse_mode}")
 
@@ -380,7 +387,7 @@ def _parse_pymupdf(
             "totalPages": total_pages,
             "totalElements": len(element_records),
             "createdAt": datetime.now().isoformat(),
-            **{k.replace(" ", "_").replace("-", "_"): v for k, v in metadata.items()},
+            **normalize_document_metadata(metadata),
         },
     }
 
@@ -422,7 +429,6 @@ def _parse_docling(
     dpi: int,
     skip_furniture: bool,
     extract_sections: bool,
-    extract_toc: bool,
     store_page_images: bool,
     progress_queue: Optional[multiprocessing.Queue],
 ) -> dict[str, Any]:
@@ -444,7 +450,6 @@ def _parse_docling(
         skip_furniture=skip_furniture,
         exclude_element_types=None,
         extract_sections=extract_sections,
-        extract_toc=extract_toc,
         store_page_images=store_page_images,
         dpi=dpi,
     )

@@ -12,7 +12,7 @@ from fastmcp.tools.tool_transform import forward
 from fastmcp.tools.tool_transform import ArgTransform
 
 
-import pandas as pd
+from .csv_records import read_csv_records
 
 from .query_compiler import (
     compile_node_ingest_query as _compile_node_ingest_query,
@@ -62,7 +62,7 @@ async def ingest_csv_into_neo4j(query: str, params: dict[str, str]) -> list[Tool
     assert csv_path is not None, "csv_path is required `params` field."
 
     # prepare records to be passed as parameters
-    records = pd.read_csv(csv_path).to_dict(orient="records")
+    records = read_csv_records(csv_path)
 
     # call the parent `write_neo4j_cypher` tool
     return await forward(query=query, params={"records": records})

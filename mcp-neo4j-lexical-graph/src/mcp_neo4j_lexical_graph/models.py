@@ -58,7 +58,13 @@ class ParsedElement(BaseModel):
     font_size_max: Optional[float] = Field(
         None, description="Max font size in the block (for heading level inference)."
     )
-    page_number: int = Field(..., description="0-based page number this element belongs to.")
+    page_number: Optional[int] = Field(
+        None, description="0-based physical page number; None for pageless sources."
+    )
+    source_anchor: Optional[str] = Field(
+        None,
+        description="Parser-provided source locator, such as a line range or document anchor.",
+    )
 
     # Caption linkage
     caption_target_id: Optional[str] = Field(
@@ -87,7 +93,9 @@ class ParsedPage(BaseModel):
     page_number: int = Field(..., description="0-based page number.")
     width: Optional[float] = None
     height: Optional[float] = None
-    text: Optional[str] = Field(None, description="Full page text (text_only / page_image modes).")
+    text: Optional[str] = Field(
+        None, description="Full page text (text_only / page_image modes)."
+    )
     image_base64: Optional[str] = Field(None, description="Base64 page image.")
     image_mime_type: Optional[str] = None
     element_ids: list[str] = Field(
@@ -102,12 +110,21 @@ class ParsedDocument(BaseModel):
     converts to this model.  The graph writer only knows about this type.
     """
 
-    id: str = Field(..., description="Unique document version id ({sourceId}_v{version}).")
+    id: str = Field(
+        ..., description="Unique document version id ({sourceId}_v{version})."
+    )
     source_id: str = Field(..., description="Stable identifier across versions.")
     version: int = Field(1, description="Version number.")
     name: str = Field(..., description="Human-readable document name.")
     source: str = Field(..., description="Source file path or URL.")
-    parse_mode: str = Field(..., description="Parser used: pymupdf, docling, page_image, vlm_blocks.")
+    parse_mode: str = Field(
+        ...,
+        description="Parser used: pymupdf, docling, page_image, document.",
+    )
+    source_format: Optional[str] = Field(
+        None,
+        description="Source format (markdown, text, html, docx); absent for legacy PDF parses.",
+    )
     parse_params: dict[str, Any] = Field(
         default_factory=dict, description="All parameters used for parsing."
     )

@@ -1,5 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
+
+CHECK_MODEL=false
+for setup_option in "$@"; do
+  case "$setup_option" in
+    --check-model) CHECK_MODEL=true ;;
+    --help|-h) echo "Usage: ./setup.sh [--check-model]"; echo "--check-model: one small paid structured-output request before config generation"; exit 0 ;;
+    *) echo "Unknown setup option: $setup_option" >&2; exit 2 ;;
+  esac
+done
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "Python 3 is required to parse dotenv safely; install python3 and retry." >&2
+  exit 1
+fi
 
 WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -87,33 +101,22 @@ else
   read -r -p "  EXTRACTION_MODEL [gpt-6-luna]: " input_extract
   EXTRACTION_MODEL="${input_extract:-gpt-6-luna}"
 
-  # Write .env
-  cat > "$ENV_FILE" << EOF
-# Neo4j connection
-NEO4J_URI=${NEO4J_URI}
-NEO4J_USERNAME=${NEO4J_USERNAME}
-NEO4J_PASSWORD=${NEO4J_PASSWORD}
-NEO4J_DATABASE=${NEO4J_DATABASE}
-
-# OpenAI API key (needed for lexical-graph and entity-graph)
-OPENAI_API_KEY=${OPENAI_API_KEY}
-
-# Model names
-EMBEDDING_MODEL=${EMBEDDING_MODEL}
-EXTRACTION_MODEL=${EXTRACTION_MODEL}
-EOF
+  # Serialize credentials as literal dotenv values, never shell source.
+  export NEO4J_URI NEO4J_USERNAME NEO4J_PASSWORD NEO4J_DATABASE
+  export OPENAI_API_KEY EMBEDDING_MODEL EXTRACTION_MODEL
+  python3 "$WORKSPACE_DIR/scripts/setup-env.py" create "$ENV_FILE"
 
   success ".env created at $ENV_FILE"
 fi
 
 # ─────────────────────────────────────────────────────────────
-# 3. Source .env
+# 3. Load .env as data (no shell evaluation or variable interpolation)
 # ─────────────────────────────────────────────────────────────
-# Export every non-comment, non-blank line
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
+chmod 600 "$ENV_FILE"
+python3 "$WORKSPACE_DIR/scripts/setup-env.py" check "$ENV_FILE"
+while IFS= read -r -d '' setup_key && IFS= read -r -d '' setup_value; do
+  export "$setup_key=$setup_value"
+done < <(python3 "$WORKSPACE_DIR/scripts/setup-env.py" export "$ENV_FILE")
 
 NEO4J_URI="${NEO4J_URI:-neo4j://localhost:7687}"
 NEO4J_USERNAME="${NEO4J_USERNAME:-neo4j}"
@@ -130,81 +133,31 @@ echo ""
 echo -e "${BOLD}── Cloning neo4j-graphrag MCP server ─────────────${RESET}"
 
 GRAPHRAG_DIR="$WORKSPACE_DIR/mcp-neo4j-graphrag"
-if [ ! -d "$GRAPHRAG_DIR" ]; then
-  if ! command -v git &> /dev/null; then
-    error "git is not installed. Cannot clone mcp-neo4j-graphrag."
-    exit 1
-  fi
-  info "Cloning mcp-neo4j-graphrag..."
-  git clone --depth 1 https://github.com/neo4j-field/mcp-neo4j-graphrag "$GRAPHRAG_DIR" --quiet
-  # Pin to Python 3.12 — grpcio has no pre-built wheels for Python 3.13+ on arm64 yet
-  echo "3.12" > "$GRAPHRAG_DIR/.python-version"
-  success "mcp-neo4j-graphrag cloned"
-else
-  info "mcp-neo4j-graphrag already present, skipping clone"
-fi
+source "$WORKSPACE_DIR/scripts/setup-graphrag.sh"
+ensure_graphrag_checkout "$GRAPHRAG_DIR" \
+  "$WORKSPACE_DIR/mcp-neo4j-proxy/src/mcp_neo4j_proxy/graphrag_revision.txt"
 
 # ─────────────────────────────────────────────────────────────
 # 5. uv sync for each local server
 # ─────────────────────────────────────────────────────────────
 
-# Helper: sync a server directory, with optional extra flags (e.g. --extra docling)
-sync_server() {
-  local server_dir="$1"; shift
-  local abs_dir="$WORKSPACE_DIR/$server_dir"
-  if [ ! -d "$abs_dir" ]; then
-    warn "$server_dir directory not found, skipping"
-    return 0
-  fi
-  info "uv sync → $server_dir"
-  if ! uv sync --directory "$abs_dir" "$@"; then
-    error "Failed to install dependencies for $server_dir"
-    error "Run manually: uv sync --directory $abs_dir"
-    exit 1
-  fi
-  success "$server_dir dependencies ready"
-}
-
-# ─────────────────────────────────────────────────────────────
-# 5a. Optional: docling for advanced PDF parsing
-# ─────────────────────────────────────────────────────────────
-INSTALL_DOCLING="${INSTALL_DOCLING:-}"
-
-if [ -z "$INSTALL_DOCLING" ]; then
-  echo ""
-  echo -e "${BOLD}── Optional: advanced PDF parsing (docling) ──────${RESET}"
-  echo "  Enables the 'docling' parse mode in neo4j-lexical-graph."
-  echo "  Requires ~1-2 GB download (PyTorch + transformer models)."
-  echo ""
-  read -r -p "  Install docling? [y/N]: " input_docling
-  case "$input_docling" in
-    [Yy]|[Yy][Ee][Ss]) INSTALL_DOCLING=true ;;
-    *) INSTALL_DOCLING=false ;;
-  esac
-  echo "" >> "$ENV_FILE"
-  echo "# Optional dependencies" >> "$ENV_FILE"
-  echo "INSTALL_DOCLING=${INSTALL_DOCLING}" >> "$ENV_FILE"
-fi
+# Dependency setup is isolated from credentials/config generation for testing.
+source "$WORKSPACE_DIR/scripts/setup-dependencies.sh"
 
 echo ""
 echo -e "${BOLD}── Installing local MCP server dependencies ──────${RESET}"
+info "Docling is included in the standard lexical-graph environment."
+info "Its PDF/ML dependencies can require substantial downloads; first use may fetch additional model assets."
+info "Installation time depends on platform, connection and cache; per-server sync times follow."
+sync_local_servers
 
-sync_server mcp-neo4j-ingest
-
-info "Verifying neo4j-ingest imports..."
-if ! uv --directory "$WORKSPACE_DIR/mcp-neo4j-ingest" run python -c "import mcp_neo4j_ingest" 2>&1; then
-  error "neo4j-ingest failed import check — check NEO4J credentials in .env"
-  exit 1
-fi
-success "neo4j-ingest import OK"
-
-if [ "$INSTALL_DOCLING" = "true" ]; then
-  sync_server mcp-neo4j-lexical-graph --extra docling
+if [ "$CHECK_MODEL" = true ]; then
+  info "Checking extraction model structured output (one small provider request)..."
+  uv --directory "$WORKSPACE_DIR/mcp-neo4j-entity-graph" run python \
+    "$WORKSPACE_DIR/scripts/check-extraction-model.py"
 else
-  sync_server mcp-neo4j-lexical-graph
+  info "Model provider check not requested. Before ingestion, run ./setup.sh --check-model (one small request)."
 fi
-sync_server mcp-neo4j-entity-graph
-sync_server mcp-neo4j-graphrag
 
 # ─────────────────────────────────────────────────────────────
 # 6. Optional: BigQuery via toolbox

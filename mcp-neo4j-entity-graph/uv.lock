@@ -1422,6 +1422,7 @@ version = "0.4.1"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
+    { name = "jsonschema" },
     { name = "litellm" },
     { name = "neo4j" },
     { name = "pillow" },
@@ -1429,12 +1430,14 @@ dependencies = [
     { name = "pydantic" },
     { name = "pymupdf" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
     { name = "structlog" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "fastmcp", specifier = ">=2.14.2,<3.0.0" },
+    { name = "jsonschema", specifier = ">=4.18,<5" },
     { name = "litellm", specifier = ">=1.40.0,!=1.82.7,!=1.82.8,<1.92" },
     { name = "neo4j", specifier = ">=5.0.0" },
     { name = "pillow", specifier = ">=12.1.1" },
@@ -1442,6 +1445,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pymupdf", specifier = ">=1.27.2" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "structlog", specifier = ">=24.0.0" },
 ]
 

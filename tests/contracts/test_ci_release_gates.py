@@ -33,6 +33,9 @@ class CIReleaseGateContractTests(unittest.TestCase):
         self.assertIn("test_structured_ingest_mcp", workflow)
         self.assertIn("test_entity_extraction_coverage_mcp", workflow)
         self.assertIn("test_desktop_lexical_smoke_mcp", workflow)
+        self.assertIn("test_setup_dependencies", workflow)
+        self.assertIn("test_schema_preflight", workflow)
+        self.assertIn("test_embedding_identity", workflow)
 
     def test_every_publish_job_requires_the_reusable_suite(self) -> None:
         self.assertTrue(PUBLISH_WORKFLOWS, "no publish workflows found")

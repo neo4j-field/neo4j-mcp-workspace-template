@@ -56,7 +56,7 @@ class _DocumentConverter:
         pass
 
     def convert(self, _path: str):
-        return types.SimpleNamespace(document=_DoclingDocument())
+        return types.SimpleNamespace(document=_DoclingDocument(), status="success", errors=[])
 
 
 class _PdfPipelineOptions:
@@ -70,6 +70,7 @@ def _deterministic_docling_backend():
     converter.PdfFormatOption = lambda **kwargs: kwargs
     pipeline = types.ModuleType("docling.datamodel.pipeline_options")
     pipeline.PdfPipelineOptions = _PdfPipelineOptions
+    pipeline.HeadingHierarchyOptions = lambda **kwargs: types.SimpleNamespace(**kwargs)
     base_models = types.ModuleType("docling.datamodel.base_models")
     base_models.InputFormat = types.SimpleNamespace(PDF="pdf")
     modules = {

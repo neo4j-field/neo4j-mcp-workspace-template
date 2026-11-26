@@ -1,0 +1,7 @@
+# This is literal, not a heading
+**asterisks** and [brackets](not-a-link)
+
+| not | a table |
+- not a list item
+
+Unicode café Ω

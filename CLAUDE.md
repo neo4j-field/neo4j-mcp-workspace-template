@@ -114,7 +114,7 @@ Five MCP servers are configured for this workspace:
 ### `neo4j-lexical-graph`
 - **Purpose:** Parse PDFs into a searchable graph with chunk nodes and embeddings
 - **Key tools:** `create_lexical_graph`, `embed_chunks` (also creates fulltext index by default), `generate_chunk_descriptions`, `assign_section_hierarchy`, `verify_lexical_graph`, `list_documents`
-- **Parse modes:** `pymupdf` (default), `docling`, `page_image`, `vlm_blocks`
+- **Parse modes:** `pymupdf` (default), `docling`, `page_image`
 - **Note:** `docling` parse mode requires the optional docling extra. Install via `uv sync --extra docling --directory mcp-neo4j-lexical-graph` or re-run `./setup.sh` after deleting `INSTALL_DOCLING` from `.env`.
 - **Required env:** none in mcp.json — reads from `.env` via python-dotenv
 - **Source:** local `mcp-neo4j-lexical-graph/` (requires `uv sync`)

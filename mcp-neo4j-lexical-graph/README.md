@@ -2,7 +2,9 @@
 
 MCP server for creating rich lexical graphs from PDF documents in Neo4j. Designed for Neo4j sales engineers to quickly build PDF-to-graph and GraphRAG agent chatbot POCs.
 
-Supports four parsing strategies (PyMuPDF, Docling, page-image, VLM block ordering), pluggable chunking, document versioning, VLM-based description generation, and vector/fulltext search with Neo4j 2026.01 native VECTOR type and document-name prefiltering.
+Supports PDF parsing strategies plus native Markdown, literal TXT, local HTML/XHTML
+and DOCX ingestion, pluggable chunking, document versioning, optional visual descriptions,
+and vector/fulltext search.
 
 ## Graph Model
 
@@ -29,13 +31,12 @@ Node types depend on the parse mode used. See [Parse Modes](#parse-modes) below.
 | `pymupdf` | Document, Chunk, Image, Table | General-purpose text + visual extraction |
 | `docling` | Document, Page, Element, Section, (then Chunk via chunking tool) | Complex layouts, section-aware chunking |
 | `page_image` | Document, Page | Slides/presentations for VLM-based extraction |
-| `vlm_blocks` | Document, Page, Element, Section, (then Chunk via chunking tool) | **Experimental.** Complex layouts without docling dependency (uses VLM API). Prefer `docling` for production use. |
 
 ## Quick Start
 
 ```bash
 cd mcp-neo4j-lexical-graph
-uv sync
+uv sync --extra docling
 ```
 
 ### Cursor MCP Configuration
@@ -67,28 +68,74 @@ Add to your `.cursor/mcp.json`:
 }
 ```
 
+## Markdown, TXT, HTML and DOCX
+
+`create_lexical_graph` selects `document` mode automatically for `.md`, `.markdown`,
+`.txt`, `.text`, `.html`, `.htm`, `.xhtml` and `.docx` (case-insensitive). A directory
+may mix them with PDFs. Existing PDF parse-mode selection is preserved; `page_image` requires PDF input. Explicit `document` mode accepts only non-PDFs.
+
+```python
+create_lexical_graph(path="/absolute/path/reference.docx", output_dir="/absolute/path/outputs")
+# Poll check_processing_status(job_id), then:
+chunk_lexical_graph(document_id="returned-document-id", strategy="structured")
+embed_chunks()
+# Existing entity extraction and ontology workflows use the resulting Chunk nodes.
+```
+
+Markdown/HTML headings and DOCX heading styles produce native sections without an
+LLM hierarchy step. TXT preserves literal characters/line endings and creates no
+invented headings. Text files require UTF-8. Lists, tables and embedded DOCX images
+are retained; linked resources are references rather than downloaded content.
+HTML is static local content, with no JavaScript/browser execution.
+
+Pageless documents store `Document.sourceFormat`, direct `HAS_ELEMENT` membership,
+ordered elements and `Element.sourceAnchor`; chunks retain `sourceFormat` and
+`sourceAnchors`. Page numbers/coordinates are absent. The reported zero source-page
+count means no physical pagination was assigned. `by_page` falls back to token
+windows in source order; `structured`/`by_section` retain native heading paths.
+Verification reconstructs content directly from elements. PageIndex citations use
+source anchors with null page fields. Vector/fulltext, schema-driven extraction,
+CSV bridge merges, provenance and conflict policy use the existing pipeline.
+
+Default IDs for new formats include their extension, so same-stem MD/DOCX files
+remain separate sources. Ambiguous mixed-folder IDs are rejected before processing;
+use explicit `document_id` values to intentionally select versioning identity.
+
+Document replacement publishes the complete parsed lexical graph and switches its
+active version in one transaction. A failed or cancelled write keeps the previous
+version active and leaves no partial replacement graph. Schema constraints are
+created first; chunking (except PyMuPDF's built-in chunks), embeddings and entity
+extraction remain subsequent workflow steps. `set_active_version` switches the
+requested document and optional existing chunk set together; an unknown chunk set
+leaves the current selection unchanged.
+
 ## Tools
 
 Tools must be called in a specific order — which tools to call depends on the parse mode and document type. See the workflow table below.
 
 ### Workflow Order
 
-| # | Tool | pymupdf | docling | page_image | vlm_blocks | Notes |
-|---|------|---------|---------|------------|------------|-------|
-| 1 | `create_lexical_graph` | ✓ | ✓ | ✓ | ✓ | Always first. Async — returns job_id. |
-| 2 | `check_processing_status` | ✓ | ✓ | ✓ | ✓ | Poll until complete after any async op. |
-| 3 | `cancel_job` | opt | opt | opt | opt | Only if aborting a running job. |
-| 4 | `chunk_lexical_graph` | ✗ | ✓ | ✓ | ✓ | Required for docling/vlm_blocks/page_image. Integrated into create for pymupdf. |
-| 5 | `list_documents` | ✓ | ✓ | ✓ | ✓ | Confirm ingestion, get document IDs. |
-| 6 | `verify_lexical_graph` | opt | opt | ✗ never | opt | Single-doc spot-check only. Never for page_image (base64 flood). |
-| 7 | `assign_section_hierarchy` | ✗ | opt | ✗ | opt | For structured docs with nested sections. Uses EXTRACTION_MODEL. |
-| 8 | `generate_chunk_descriptions` | recommended¹ | recommended¹ | **required** | recommended¹ | VLM descriptions for Image/Table/Page nodes. Required before embed_chunks for page_image. |
-| 9 | `embed_chunks` | ✓ | ✓ | ✓ | ✓ | Synchronous. Call with no parameters — auto-detects textDescription. |
-| 10 | `set_active_version` | opt | opt | opt | opt | Only when re-ingesting a document. |
-| 11 | `clean_inactive` | opt | opt | opt | opt | After set_active_version, to remove old versions. |
-| 12 | `delete_document` | opt | opt | opt | opt | Destructive — removes document + all children. |
+| # | Tool | pymupdf | docling | page_image | Notes |
+|---|------|---------|---------|------------|-------|
+| 1 | `create_lexical_graph` | ✓ | ✓ | ✓ | Always first. Async — returns job_id. |
+| 2 | `check_processing_status` | ✓ | ✓ | ✓ | Poll until complete after any async op. |
+| 3 | `cancel_job` | opt | opt | opt | Only if aborting a running job. |
+| 4 | `chunk_lexical_graph` | ✗ | ✓ | ✓ | Required for docling/document/page_image. Integrated into create for pymupdf. |
+| 5 | `list_documents` | ✓ | ✓ | ✓ | Confirm ingestion, get document IDs. |
+| 6 | `verify_lexical_graph` | opt | opt | ✗ never | Single-doc spot-check only. Never for page_image (base64 flood). |
+| 7 | `assign_section_hierarchy` | ✗ | correction only | ✗ | Docling supplies native levels; use this explicit correction only when needed. Uses EXTRACTION_MODEL unless levels are supplied. |
+| 8 | `generate_chunk_descriptions` | recommended¹ | recommended¹ | **required** | VLM descriptions for Image/Table/Page nodes. Required before embed_chunks for page_image. |
+| 9 | `embed_chunks` | ✓ | ✓ | ✓ | Synchronous. Call with no parameters — auto-detects textDescription. |
+| 10 | `set_active_version` | opt | opt | opt | Only when re-ingesting a document. |
+| 11 | `clean_inactive` | opt | opt | opt | After set_active_version, to remove old versions. |
+| 12 | `delete_document` | opt | opt | opt | Destructive — removes document + all children. |
 
-¹ Recommended when `extract_images=True` or `extract_tables=True` (pymupdf) or when the document contains images/tables (docling/vlm_blocks). Without descriptions, Image/Table nodes are invisible to semantic search.
+¹ Recommended when `extract_images=True` or `extract_tables=True` (pymupdf) or when the document contains images/tables (docling/document). Without descriptions, Image/Table nodes are invisible to semantic search.
+
+Docling uses native heading hierarchy by default. With `strategy="structured"`,
+chunks include the full heading chain; no separate hierarchy LLM call is required.
+Flat documents remain valid. Review inferred levels on your own document before
+relying on them for section-sensitive retrieval.
 
 ### Tool Reference
 
@@ -136,7 +183,45 @@ separate deferred `DOC-001` architecture task.
 
 ## Requirements
 
-- **Neo4j 2026.01+** (native VECTOR type, vector search with filters)
+- **Neo4j with vector-index support** (compatibility tested on 5.26.33 and 2025.12.1; native vector values and filtered indexes are used when supported)
 - **Python 3.10+**
 - API key for your embedding provider (OpenAI, Azure, Cohere, Voyage, Ollama, etc.)
-- API key for VLM if using `vlm_blocks` mode, `generate_chunk_descriptions`, or `assign_section_hierarchy`
+- API key for VLM for `generate_chunk_descriptions`, or `assign_section_hierarchy`
+
+
+### Embedding cache identity and migrations
+
+`embed_chunks` records `embeddingProvider`, `embeddingModel`, `embeddingDimensions`,
+`embeddingInputHash`, and `embeddingSpace` beside each `text_embedding`. The input
+hash covers the exact composed provider input, including ordered context and the
+resolved text/visual-description fallback. Legacy vectors without identity are
+regenerated; unchanged verified inputs skip provider work and still repair a missing
+vector index. Unused raw text changes do not invalidate a preferred visual description.
+
+`dimensions` optionally requests provider dimensions. Requested and actual dimensions
+are validated; a fixed named index is never silently dropped or recreated. Explicit
+incompatible dimensions fail before provider work. With provider-default dimensions,
+an actual refresh response may be needed to discover incompatibility, but no separate
+billable probe request is made. A model/dimension refresh cannot mix spaces with
+unselected vectors in the same index. `include_inactive=true` includes inactive Chunk
+nodes in a label-wide refresh when those also participate in the index.
+
+A different label on the **same nodes is not separate vector storage**: this tool
+always writes `text_embedding`. Space-changing writes refuse overlapping same-property
+indexes; same-space refreshes validate their dimensions and recheck current node labels
+under the publication lock. Use genuinely separate nodes/storage and indexes, or an
+explicitly reviewed index migration. Hidden changes behind an unchanged remote model
+alias cannot be detected from configuration alone: prefer versioned model identifiers,
+or explicitly refresh the whole indexed label when an alias is retargeted.
+
+Vector values and identity metadata publish atomically after source-input and vector-space
+rechecks. A partial/invalid provider response or changed source aborts publication.
+The tool needs `SHOW CONSTRAINT` to inspect the reserved uniqueness constraint
+`neo4j_mcp_embedding_lock_unique`. If it is absent, an administrator can precreate it
+on `:EmbeddingPublicationLock(indexName)`, or grant `CREATE CONSTRAINT` to the runtime
+role. Graph read/write, name and index privileges are also required; these constraint
+checks happen before provider requests. A temporary
+per-index lock node is removed on commit or rollback. No constraint/index is automatically
+dropped. The uniqueness constraint and an empty verified vector index may remain when a
+later provider/source check aborts: those schema side effects are separate from atomic
+vector/metadata publication. Large-run memory bounds remain separate performance work.

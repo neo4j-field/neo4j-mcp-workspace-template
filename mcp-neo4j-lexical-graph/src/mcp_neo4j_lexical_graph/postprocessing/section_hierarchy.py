@@ -1,7 +1,7 @@
 """Post-processing: assign section hierarchy levels using LLM or agent.
 
-Fixes Docling's flat level=1 sections by assigning appropriate heading
-levels based on section titles. Two modes:
+Optional correction for parsed section levels. Docling now infers native hierarchy
+during parsing; this tool is only called explicitly when correction is needed. Two modes:
   - LLM mode (default): asks gpt-6-luna (medium reasoning) to infer levels.
   - Agent mode: the calling agent provides explicit levels, skipping the LLM.
 

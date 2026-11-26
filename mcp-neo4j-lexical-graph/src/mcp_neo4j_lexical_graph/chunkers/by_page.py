@@ -12,7 +12,7 @@ import structlog
 from neo4j import AsyncDriver
 
 from ..graph_reader import get_elements_for_document, get_pages_for_document
-from .base import BaseChunker, ChunkData, strip_base64_from_text
+from .base import BaseChunker, ChunkData, strip_base64_from_text, attach_source_locators
 
 logger = structlog.get_logger()
 
@@ -39,8 +39,25 @@ class ByPageChunker(BaseChunker):
         elements = await get_elements_for_document(driver, database, document_id)
         pages = await get_pages_for_document(driver, database, document_id)
 
-        if not elements or not pages:
+        if not elements:
             return []
+        if not pages:
+            # Pageless sources have source anchors, not physical pages. Preserve
+            # document order with bounded token windows instead of inventing page 1.
+            from .token_window import TokenWindowChunker
+
+            logger.info(
+                "ByPageChunker: pageless source, using document-order token windows",
+                document_id=document_id,
+            )
+            return await TokenWindowChunker().create_chunks(
+                driver,
+                database,
+                document_id,
+                include_tables_as_chunks=include_tables_as_chunks,
+                include_images_as_chunks=include_images_as_chunks,
+                prepend_section_heading=prepend_section_heading,
+            )
 
         elem_by_id = {e["id"]: e for e in elements}
         chunks: list[ChunkData] = []
@@ -62,9 +79,12 @@ class ByPageChunker(BaseChunker):
                     clean_text = strip_base64_from_text(etext)
                     chunks.append(
                         ChunkData(
-                            id="", text=clean_text or etext, index=-1,
+                            id="",
+                            text=clean_text or etext,
+                            index=-1,
                             token_count=len(self.encoding.encode(clean_text or etext)),
-                            type="table", element_ids=[eid],
+                            type="table",
+                            element_ids=[eid],
                             image_base64=e.get("imageBase64") or "",
                             image_mime_type=e.get("imageMimeType") or "",
                             text_as_html=e.get("textAsHtml") or "",
@@ -75,9 +95,12 @@ class ByPageChunker(BaseChunker):
                     clean_text = strip_base64_from_text(etext)
                     chunks.append(
                         ChunkData(
-                            id="", text=clean_text or etext, index=-1,
+                            id="",
+                            text=clean_text or etext,
+                            index=-1,
                             token_count=len(self.encoding.encode(clean_text or etext)),
-                            type="image", element_ids=[eid],
+                            type="image",
+                            element_ids=[eid],
                             image_base64=e.get("imageBase64") or "",
                             image_mime_type=e.get("imageMimeType") or "",
                             text_as_html=e.get("textAsHtml") or "",
@@ -93,12 +116,16 @@ class ByPageChunker(BaseChunker):
                 full_text = "\n\n".join(texts)
                 chunks.append(
                     ChunkData(
-                        id="", text=full_text, index=-1,
+                        id="",
+                        text=full_text,
+                        index=-1,
                         token_count=len(self.encoding.encode(full_text)),
-                        type="text", element_ids=chunk_eids,
+                        type="text",
+                        element_ids=chunk_eids,
                     )
                 )
 
+        attach_source_locators(chunks, elements)
         for idx, c in enumerate(chunks):
             c.index = idx
             c.id = f"{document_id}_chunk_{idx:04d}"

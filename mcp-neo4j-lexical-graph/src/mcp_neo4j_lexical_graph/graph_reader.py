@@ -54,6 +54,7 @@ async def list_all_documents(
                d.name AS name,
                d.source AS source,
                d.parseMode AS parseMode,
+               d.sourceFormat AS sourceFormat,
                d.totalElements AS elementCount,
                coalesce(d.totalPages, pageNodeCount) AS sourcePageCount,
                pageNodeCount,
@@ -77,14 +78,17 @@ async def get_elements_for_document(
     in Python to produce the correct reading order.
     """
     query = """
-        MATCH (d:Document {id: $docId})-[:HAS_PAGE]->(p:Page)-[:HAS_ELEMENT]->(e:Element)
+        MATCH (d:Document {id: $docId})-[:HAS_PAGE|HAS_ELEMENT*1..2]->(e:Element)
+        WITH DISTINCT d, e
         OPTIONAL MATCH (e)-[:NEXT_ELEMENT]->(nxt:Element)
+        WHERE EXISTS { MATCH (d)-[:HAS_PAGE|HAS_ELEMENT*1..2]->(nxt) }
         RETURN e.id AS id, e.type AS type, e.text AS text,
                e.textAsHtml AS textAsHtml,
                e.imageBase64 AS imageBase64,
                e.imageMimeType AS imageMimeType,
                e.pageNumber AS pageNumber,
-               e.level AS level,
+               e.sourceAnchor AS sourceAnchor, d.sourceFormat AS sourceFormat,
+               e.level AS level, e.order AS order,
                nxt.id AS nextId
     """
     async with driver.session(database=database) as session:
@@ -108,25 +112,36 @@ async def get_elements_for_document(
     # Walk chain(s) starting from heads
     ordered: list[dict[str, Any]] = []
     visited: set[str] = set()
-    for head in sorted(heads):
+    for head in sorted(
+        heads,
+        key=lambda rid: (
+            by_id[rid].get("pageNumber") or 0,
+            by_id[rid].get("order") if by_id[rid].get("order") is not None else 10**12,
+            rid,
+        ),
+    ):
         current = head
         while current and current not in visited:
             visited.add(current)
             row = by_id.get(current)
             if row:
-                ordered.append({
-                    k: v for k, v in row.items() if k != "nextId"
-                })
+                ordered.append({k: v for k, v in row.items() if k != "nextId"})
                 current = row.get("nextId")
             else:
                 break
 
     # Append any elements not reached by chain walking (orphans)
-    for rid, row in by_id.items():
+    for rid in sorted(
+        by_id,
+        key=lambda rid: (
+            by_id[rid].get("pageNumber") or 0,
+            by_id[rid].get("order") if by_id[rid].get("order") is not None else 10**12,
+            rid,
+        ),
+    ):
+        row = by_id[rid]
         if rid not in visited:
-            ordered.append({
-                k: v for k, v in row.items() if k != "nextId"
-            })
+            ordered.append({k: v for k, v in row.items() if k != "nextId"})
 
     return ordered
 
@@ -140,7 +155,7 @@ async def get_sections_for_document(
         OPTIONAL MATCH (s)-[:HAS_ELEMENT]->(e:Element)
         WITH s, collect(e.id) AS elementIds
         RETURN s.id AS id, s.title AS title, s.level AS level, elementIds
-        ORDER BY toInteger(split(s.id, '_sec_')[-1])
+        ORDER BY coalesce(s.order, toInteger(split(s.id, '_sec_')[-1]))
     """
     async with driver.session(database=database) as session:
         result = await session.run(query, docId=document_id)
@@ -236,7 +251,7 @@ async def get_section_hierarchy(
         OPTIONAL MATCH (parent:Section)-[:HAS_SUBSECTION]->(s)
         RETURN s.id AS id, s.title AS title, s.level AS level,
                parent.id AS parentId
-        ORDER BY toInteger(split(s.id, '_sec_')[-1])
+        ORDER BY coalesce(s.order, toInteger(split(s.id, '_sec_')[-1]))
     """
     async with driver.session(database=database) as session:
         result = await session.run(query, docId=document_id)
@@ -258,8 +273,11 @@ async def get_element_section_map(
 
 
 async def get_active_chunks_for_document(
-    driver: AsyncDriver, database: str, document_id: str,
-    *, types: list[str] | None = None
+    driver: AsyncDriver,
+    database: str,
+    document_id: str,
+    *,
+    types: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Return active chunks for a document, optionally filtered by type.
 
@@ -294,23 +312,56 @@ async def get_active_chunks_for_document(
 async def delete_document_cascade(
     driver: AsyncDriver, database: str, document_id: str
 ) -> dict[str, int]:
-    """Delete a document and ALL its children (pages, elements, sections, chunks, toc entries)."""
+    """Delete exact lexical ownership, retaining children shared with other Documents.
+
+    Never infer ownership from IDs or traverse provenance into domain entities.
+    Deleting a source intentionally detaches its incoming provenance edges.
+    """
     counts: dict[str, int] = {}
 
     for label, match in [
+        # Children first: parent deletion must not erase the ownership evidence.
+        (
+            "Element",
+            "MATCH (d:Document {id: $docId}) MATCH (n:Element) WHERE EXISTS { MATCH (d)-[:HAS_PAGE|HAS_ELEMENT|HAS_SECTION|HAS_SUBSECTION*1..32]->(n) } OR EXISTS { MATCH (d)<-[:PART_OF]-(:Chunk)-[:HAS_ELEMENT]->(n) }",
+        ),
+        (
+            "Image",
+            "MATCH (d:Document {id: $docId}) MATCH (n:Image) WHERE EXISTS { MATCH (d)-[:HAS_PAGE|HAS_ELEMENT|HAS_SECTION|HAS_SUBSECTION*1..32]->(n) } OR EXISTS { MATCH (d)<-[:PART_OF]-(:Chunk)-[:HAS_ELEMENT]->(n) }",
+        ),
+        (
+            "Table",
+            "MATCH (d:Document {id: $docId}) MATCH (n:Table) WHERE EXISTS { MATCH (d)-[:HAS_PAGE|HAS_ELEMENT|HAS_SECTION|HAS_SUBSECTION*1..32]->(n) } OR EXISTS { MATCH (d)<-[:PART_OF]-(:Chunk)-[:HAS_ELEMENT]->(n) }",
+        ),
         ("Chunk", "MATCH (n:Chunk)-[:PART_OF]->(d:Document {id: $docId})"),
-        ("Section", "MATCH (d:Document {id: $docId})-[:HAS_SECTION*]->(n:Section)"),
-        ("Element", "MATCH (n:Element) WHERE n.id STARTS WITH $docId"),
-        ("Image", "MATCH (d:Document {id: $docId})-[:HAS_ELEMENT]->(n:Image)"),
-        ("Table", "MATCH (d:Document {id: $docId})-[:HAS_ELEMENT]->(n:Table)"),
+        (
+            "Section",
+            "MATCH (d:Document {id: $docId})-[:HAS_SECTION|HAS_SUBSECTION*1..32]->(n:Section)",
+        ),
         ("Page", "MATCH (d:Document {id: $docId})-[:HAS_PAGE]->(n:Page)"),
         ("Document", "MATCH (n:Document {id: $docId})"),
     ]:
         total = 0
         while True:
+            shared_guard = (
+                ""
+                if label == "Document"
+                else """
+                WITH DISTINCT d,n
+                WHERE NOT EXISTS {
+                    MATCH (owner:Document)-[:HAS_PAGE|HAS_ELEMENT|HAS_SECTION|HAS_SUBSECTION*1..32]->(n)
+                    WHERE owner <> d
+                } AND NOT EXISTS {
+                    MATCH (n:Chunk)-[:PART_OF]->(owner:Document) WHERE owner <> d
+                } AND NOT EXISTS {
+                    MATCH (n)<-[:HAS_ELEMENT]-(:Chunk)-[:PART_OF]->(owner:Document) WHERE owner <> d
+                }
+            """
+            )
             query = f"""
                 {match}
-                WITH n LIMIT 10000
+                {shared_guard}
+                WITH DISTINCT n LIMIT 10000
                 DETACH DELETE n
                 RETURN count(*) AS cnt
             """

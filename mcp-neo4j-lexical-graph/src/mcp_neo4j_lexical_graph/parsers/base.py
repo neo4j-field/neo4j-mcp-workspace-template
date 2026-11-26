@@ -22,10 +22,10 @@ class BaseParser(ABC):
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> ParsedDocument:
-        """Parse a PDF and return a ParsedDocument.
+        """Parse a supported document and return a ParsedDocument.
 
         Args:
-            pdf_path: Path to the PDF file.
+            pdf_path: Local source path (argument name retained for PDF compatibility).
             source_id: Stable document identifier (same across versions).
             version: Version number for this parse.
             metadata: Optional user-provided metadata.

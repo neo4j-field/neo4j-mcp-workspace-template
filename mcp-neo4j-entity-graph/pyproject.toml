@@ -25,6 +25,8 @@ dependencies = [
     "pymupdf>=1.27.2",
     "pillow>=12.1.1",
     "platformdirs>=4.0.0",
+    "jsonschema>=4.18,<5",
+    "PyYAML>=6.0,<7",
 ]
 
 [project.urls]

@@ -115,7 +115,7 @@ class ExtractedEntity(BaseModel):
         ..., description="Entity properties including key property"
     )
 
-    def get_key_value(self, key_property: str) -> Optional[str]:
+    def get_key_value(self, key_property: str) -> Optional[str | int | float | bool]:
         return self.properties.get(key_property)
 
 
@@ -124,9 +124,9 @@ class ExtractedRelationship(BaseModel):
 
     type: str = Field(..., description="Relationship type")
     source_label: str = Field(..., description="Source entity label")
-    source_key: str = Field(..., description="Source entity key value")
+    source_key: str | int | float | bool = Field(..., description="Native scalar source entity key value")
     target_label: str = Field(..., description="Target entity label")
-    target_key: str = Field(..., description="Target entity key value")
+    target_key: str | int | float | bool = Field(..., description="Native scalar target entity key value")
     properties: dict[str, Any] = Field(
         default_factory=dict, description="Relationship properties"
     )

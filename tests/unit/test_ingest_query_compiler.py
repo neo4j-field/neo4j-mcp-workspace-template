@@ -93,6 +93,8 @@ class NodeQueryCompilerTests(unittest.TestCase):
         query = compile_node_ingest_query(PERSON)
         self.assertIn("node.__structuredSource = true", query)
         self.assertIn("node.__structuredProperties", query)
+        with self.assertRaisesRegex(IngestModelError, 'reserved'):
+            compile_node_ingest_query({**PERSON, 'label':'EmbeddingPublicationLock'})
         with self.assertRaisesRegex(IngestModelError, 'reserved ownership'):
             compile_node_ingest_query({**PERSON, 'properties': [{'name': '__extractionCreated'}]})
 

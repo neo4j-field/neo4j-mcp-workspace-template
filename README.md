@@ -1,14 +1,25 @@
 # neo4j-mcp-workspace-template
 
-A template for end-to-end Neo4j graph development using MCP servers. Compatible with **Claude Code**, **Cursor**, **Gemini CLI**, **GitHub Copilot (VS Code)**, **OpenCode**, **OpenAI Codex CLI**, and **Mistral Vibe**.
+A template for SEs to build Neo4j proof-of-concept graphs from CSVs, PDFs, Markdown, TXT, local HTML and DOCX using MCP servers, with working code to reuse in customer projects. Compatible with **Claude Code**, **Cursor**, **Gemini CLI**, **GitHub Copilot (VS Code)**, **OpenCode**, **OpenAI Codex CLI**, and **Mistral Vibe**.
+
+**Claude Code test prompts:** [Smoke test](SMOKE_TEST_PROMPT.md) · [Follow-up acceptance](FOLLOWUP_ACCEPTANCE_PROMPT.md) · [Benchmark](BENCHMARK_TEST_PROMPT.md). Run smoke first.
 
 ## Quick Start
+
+Separate isolated development-snapshot checks on macOS arm64 (uv/Python already
+installed) measured **27s for setup** with about **1.26 GiB of dependency cache**,
+and **45s for the first two-page Docling parse** with about **505 MiB of model files**.
+These are local cache sizes, not measured network transfer; timings vary.
+See the [setup measurement](docs/product/reviews/2026-11-24-cold-setup.md) and
+[live acceptance](docs/product/reviews/2026-11-24-live-release-acceptance.md) for scope.
 
 ```bash
 git clone https://github.com/neo4j-field/neo4j-mcp-workspace-template
 cd neo4j-mcp-workspace-template
 chmod +x setup.sh && ./setup.sh
 ```
+
+Neo4j prerequisite: `get_neo4j_schema_and_indexes` currently requires compatible **APOC Core** (`apoc.meta.schema`) and permission to execute it. Enable it on the target instance before the full workflow; a default `neo4j-cli docker create` does not enable APOC automatically. PageIndex navigation itself does not require APOC.
 
 Then open your AI coding tool:
 
@@ -22,11 +33,24 @@ Then open your AI coding tool:
 | **Codex CLI** | `codex` | Ask Codex to call `list_example_data_models` |
 | **Mistral Vibe** | `vibe` (trust the folder when prompted) | Ask Vibe to call `list_example_data_models` |
 
+Setup requires `python3` and `uv`. It creates `.env` with owner-only permissions
+(`600`) and treats its contents as data: shell commands, dollar substitutions and
+backticks are never evaluated. Quote values containing spaces or `#`; values are
+literal, so write complete credentials rather than `${OTHER_VARIABLE}` references.
+Existing `.env` contents are preserved; permissions are tightened to `600`.
+
+Before importing data, run `./setup.sh --check-model` to make one small provider
+request that verifies structured output using the configured extraction model.
+This may incur a small provider charge. Failures stop before config generation,
+report recovery steps without printing provider response bodies, and perform no
+database writes. Plain `./setup.sh` remains provider-free. The probe checks text
+structured output; it does not certify vision, extraction quality or embeddings.
+
 `setup.sh` will:
 
 1. Prompt for your Neo4j credentials and OpenAI API key
 2. Write `.env` with your configuration
-3. Install dependencies for the local MCP servers
+3. Install dependencies for the local MCP servers, including Docling for PDF parsing (first use may also download model assets)
 4. Generate MCP config files for all 7 tools:
    - `.mcp.json` — Claude Code
    - `.cursor/mcp.json` — Cursor
@@ -35,6 +59,12 @@ Then open your AI coding tool:
    - `opencode.json` — OpenCode
    - `.codex/config.toml` — OpenAI Codex CLI
    - `.vibe/config.toml` — Mistral Vibe
+
+Embedding needs `SHOW CONSTRAINT` permission to inspect the reserved uniqueness constraint
+`neo4j_mcp_embedding_lock_unique`. If it is absent, a database administrator can precreate
+it on `:EmbeddingPublicationLock(indexName)`, or grant `CREATE CONSTRAINT` so the tool can
+create it. These checks happen before embedding provider calls. Graph read/write, name
+and index privileges are also required; see [embedding permissions](mcp-neo4j-lexical-graph/docs/tools-embedding.md#publication-permissions-and-failures).
 
 ---
 
@@ -87,7 +117,7 @@ The MCP servers run on your local machine and access your local filesystem. When
 ## Requirements
 
 - **[uv](https://docs.astral.sh/uv/)** — required to run all MCP servers (provides `uvx`)
-- **Neo4j 2025.01+** — required for native `VECTOR` type used by lexical-graph
+- **Neo4j with vector-index support** — compatibility checks cover 5.26.33 and 2025.12.1; native vector values and filtered indexes are used when supported
   - [Neo4j Desktop](https://neo4j.com/download/) or [AuraDB](https://neo4j.com/cloud/platform/aura-graph-database/)
 - **LLM provider** — for embedding generation and entity extraction (see [LLM Configuration](#llm-configuration) below)
 - **Google MCP Toolbox** (optional) — only if using BigQuery as a data source
@@ -140,14 +170,27 @@ Loads structured CSV data into Neo4j using parameterized Cypher queries generate
 
 ### Lexical Graph
 
-Parses PDFs into a searchable graph with `Document`, `Chunk`, and optional `Image`/`Table`/`Section`/`Page` nodes, vector embeddings, and fulltext indexes. Supports 4 parse modes:
+Parses PDFs, Markdown, TXT, local HTML/XHTML and DOCX into a searchable graph with `Document`, `Chunk`, and optional `Image`/`Table`/`Section`/`Page` nodes, embeddings, and fulltext indexes.
 
-- `pymupdf` — fast text extraction + optional image/table capture (default)
-- `docling` — full layout detection with sections, tables, captions
-- `page_image` — vision model per page (slides, diagrams, visual-heavy docs)
-- `vlm_blocks` — pymupdf + VLM block classification (faster than docling, experimental)
+| Choose | When to use it |
+|--------|----------------|
+| Automatic `document` routing | Markdown, TXT, local HTML/XHTML and DOCX; native text/heading parsing without PDF rendering |
+| `pymupdf` (default for PDFs) | Text-heavy PDFs; fast extraction without layout-model downloads |
+| `docling` | Section hierarchy, structured tables, and mixed layouts |
+| `page_image` | Slides, diagrams, and pages whose visual arrangement carries meaning; requires a vision model |
 
-Tools must be called in a specific order depending on the parse mode. See `mcp-neo4j-lexical-graph/README.md` for the full workflow table.
+See the [parse-mode guide](.agents/skills/develop-neo4j-graph/references/HANDLE_UNSTRUCTURED_DATA.md#parse-mode-guide) for the full workflow.
+
+Place the new file types in `data/documents/` and pass the absolute file/folder
+path to `create_lexical_graph`; supported extensions are selected automatically.
+Then call `chunk_lexical_graph` (`structured` for heading-aware documents),
+`embed_chunks` and the existing extraction workflow. Mixed PDF/document folders
+are supported. Native headings power PageIndex; TXT stays literal and flat.
+
+Pageless sources use source-file/element or line anchors rather than page numbers.
+DOCX embedded images and tables are retained; referenced HTML/Markdown images stay
+as references, with no browser execution or asset fetching. Text files must be UTF-8.
+See the [document workflow](.agents/skills/develop-neo4j-graph/references/DOCUMENT_MODE.md).
 
 - **Server:** `mcp-neo4j-lexical-graph` (local — `mcp-neo4j-lexical-graph/`)
 - **Required credentials:** Neo4j connection vars + LLM API key + `EMBEDDING_MODEL`
@@ -163,9 +206,26 @@ Extracts structured entities from lexical graph chunks using an LLM. Supports 10
 
 Read/write Cypher queries, vector search, fulltext search, and graph-traversal queries. Replaces the standalone Cypher server and adds RAG retrieval on top.
 
-- **Server:** `mcp-neo4j-graphrag` (local — cloned by `setup.sh`)
-- **Key tools:** `read_neo4j_cypher`, `write_neo4j_cypher`, `get_neo4j_schema_and_indexes`, `vector_search`, `fulltext_search`, `search_cypher_query`, `read_node_image`
+- **Server:** `mcp-neo4j-graphrag` (local — cloned by `setup.sh` at the commit in `mcp-neo4j-proxy/src/mcp_neo4j_proxy/graphrag_revision.txt`)
+- **Source review:** [GraphRAG draft PR #2](https://github.com/neo4j-field/mcp-neo4j-graphrag/pull/2). The proxy source uses the same Git pin; source installs require Git. Published Desktop artifact alignment remains part of release verification.
+- **Key tools:** `read_neo4j_cypher`, `write_neo4j_cypher`, `get_neo4j_schema_and_indexes`, `vector_search`, `fulltext_search`, `search_cypher_query`, `read_node_image`, `get_ontology`, `list_retrieval_documents`, `get_document_outline`, `get_section_content`, `get_document_content`
 - **Required credentials:** reads from `.env` via python-dotenv
+
+Document navigation tools appear only when the connected database contains usable
+active lexical content; section tools additionally require section structure.
+Refresh tool discovery after ingestion if the client caches its tool list.
+
+For document-tree retrieval, discover a document, read its outline, choose section
+IDs and read the source content. Continue using the returned pagination cursors.
+Section-aware parses carry heading paths and page ranges; flat documents remain
+readable through `get_document_content`. No embeddings or hierarchy LLM calls are
+needed for navigation.
+
+For text-to-Cypher, call `get_ontology` for domain meaning and vocabulary before
+writing a query. Configure `ONTOLOGY_FILE` for a spec artifact, or use the template
+Ontology DB (`ONTOLOGY_NAME`, `NEO4J_ONTOLOGY_DATABASE`). Keep schema/index discovery
+for physical details and read queries for actual data values. Full spec retrieval
+support is broader than the extraction adapter's subset.
 
 ### BigQuery (optional)
 
@@ -187,12 +247,12 @@ brew install mcp-toolbox
 4. **Query** — generate Cypher for each use case
 5. **Validate** — run queries and verify results address the use cases
 
-### Unstructured data (PDF) — use `/develop-neo4j-graph`
+### Documents (PDF, Markdown, TXT, HTML, DOCX) — use `/develop-neo4j-graph`
 
-1. **Discovery** — review PDFs; select parse mode based on document type
+1. **Discovery** — review source documents; non-PDF formats route automatically, PDFs retain their parser choice
 2. **Use case** — infer CHATBOT or ANALYTICAL mode from use case description
 3. **Model** — design a graph data model with the Data Modeling server
-4. **Lexical Graph** — parse PDFs, chunk (if needed), generate descriptions (if images/tables), embed
+4. **Lexical Graph** — parse documents, chunk (if needed), generate descriptions (if images/tables), embed
 5. **Schema + validators** — export extraction schema and review Pydantic validators
 6. **Entity Graph** — extract structured entities from chunks
 7. **Q&A / Analysis** — answer questions (CHATBOT) or generate Cypher reports (ANALYTICAL)
@@ -208,6 +268,36 @@ Use the `develop-neo4j-graph` skill for the full guided workflow (CSV + PDF, CHA
 | Cursor, GitHub Copilot VS Code | Describe the task — skill auto-triggers |
 | OpenCode | Select `develop-neo4j-graph` from the agent picker |
 | Mistral Vibe | Describe the task — skill auto-triggers (discovered from `.agents/skills/`) |
+
+## Rebuild this POC / start fresh
+
+For a shared database, select the exact source chunks/pages and keep a stable extraction
+scope. Re-running with changed source content, schema, or configuration refreshes those
+sources; `force=True` also refreshes unchanged ones:
+
+```python
+extract_entities(
+    schema="/absolute/path/to/outputs/schemas/poc.py",
+    source_ids=["your-exact-chunk-id"],
+    extraction_scope="my-poc",
+    force=True,
+)
+```
+
+This replaces tracked contributions for the selected sources in that scope. Other
+scopes and existing CSV/user properties are preserved by the default
+`property_policy="preserve_existing"`; proposals and conflicts remain inspectable.
+An extraction failure preserves the previous domain output. Inspect legacy sources
+before rebuilding: old untracked provenance requires fresh explicitly selected sources
+or a reviewed migration. This operation does not reset CSV imports or delete documents.
+
+For a completely fresh run, use a new disposable database and point setup at it, then
+restart your coding tool and run the CSV + PDF workflow again. Keep the old database
+until the new report passes validation. A namespace or document name alone does not
+isolate domain nodes: matching labels and merge keys can still share nodes.
+
+The [release checklist](docs/product/RELEASE_CHECKLIST.md) tracks the remaining checks
+before publishing this work.
 
 ---
 
@@ -302,6 +392,15 @@ The script is idempotent. Re-run it any time to:
 - Regenerate all 7 MCP config files after credential changes
 - Re-install server dependencies after a `git pull`
 
+Docling is part of the standard lexical-graph environment; setup no longer asks
+whether to install it. Its PDF/ML dependencies can require substantial downloads,
+and first use may fetch additional model assets. Download size and duration vary
+by platform, network and cache; no fixed installation-time estimate is assumed.
+Setup prints each server's dependency-sync duration and a final timing summary.
+The `.venv present/absent` labels describe the directory before sync, not proof of
+a warm/cold package cache. Whole-second `0s` results mean less than one second.
+Older `INSTALL_DOCLING=false` entries are ignored without rewriting `.env`.
+
 ### Alternative: Manual Setup
 
 Manual setup steps
@@ -325,7 +424,7 @@ git clone --depth 1 https://github.com/neo4j-field/mcp-neo4j-graphrag
 
 ```bash
 uv sync --directory mcp-neo4j-ingest
-uv sync --directory mcp-neo4j-lexical-graph
+uv sync --directory mcp-neo4j-lexical-graph --extra docling
 uv sync --directory mcp-neo4j-entity-graph
 uv sync --directory mcp-neo4j-graphrag
 ```
@@ -437,3 +536,7 @@ neo4j-mcp-workspace-template/
         ├── setup-workspace/        # /setup-workspace validation skill
         └── dev/evaluate-pipeline/  # /dev:evaluate-pipeline skill
 ```
+
+### Synthetic acceptance dataset
+
+Generate reusable all-format smoke and benchmark fixtures with `scripts/generate-synthetic-dataset.sh --profile smoke` (or `benchmark`). The benchmark contains 10,000 product rows plus 102 auxiliary CSV rows and a 50-page PDF. See the [SE walkthrough, expected answers and validation commands](docs/product/SYNTHETIC_DATASET.md).

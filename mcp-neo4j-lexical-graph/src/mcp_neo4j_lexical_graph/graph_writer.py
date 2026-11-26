@@ -2,7 +2,7 @@
 
 Handles:
 - Document versioning (sourceId, version, active)
-- Page / Element / Section / TOCEntry node creation
+- Page / Element / Section node creation
 - All relationships (HAS_PAGE, NEXT_PAGE, HAS_ELEMENT, NEXT_ELEMENT,
   HAS_SECTION, HAS_SUBSECTION, NEXT_SECTION, CAPTION_OF, etc.)
 - Constraint creation (idempotent)
@@ -11,12 +11,13 @@ Handles:
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 import structlog
 from neo4j import AsyncDriver
 
 from .models import ParsedDocument
+from .metadata import normalize_document_metadata
 
 logger = structlog.get_logger()
 
@@ -43,13 +44,13 @@ async def ensure_constraints(
         "CREATE CONSTRAINT element_id IF NOT EXISTS FOR (e:Element) REQUIRE e.id IS UNIQUE",
         "CREATE CONSTRAINT chunk_id IF NOT EXISTS FOR (c:Chunk) REQUIRE c.id IS UNIQUE",
     ]
-    # Page nodes: only page_image and vlm_blocks modes create them
-    if parse_mode in ("page_image", "vlm_blocks"):
+    # Page nodes: only page_image mode create them
+    if parse_mode == "page_image":
         constraints.append(
             "CREATE CONSTRAINT page_id IF NOT EXISTS FOR (p:Page) REQUIRE p.id IS UNIQUE"
         )
-    # Section nodes: only docling and vlm_blocks modes extract sections
-    if parse_mode in ("docling", "vlm_blocks"):
+    # Section nodes: only docling/document modes extract sections
+    if parse_mode in ("docling", "document"):
         constraints.append(
             "CREATE CONSTRAINT section_id IF NOT EXISTS FOR (s:Section) REQUIRE s.id IS UNIQUE"
         )
@@ -64,8 +65,10 @@ async def ensure_constraints(
         )
     async with driver.session(database=database) as session:
         for stmt in constraints:
-            await session.run(stmt)
-    logger.debug("Constraints ensured", parse_mode=parse_mode, constraints=len(constraints))
+            await (await session.run(stmt)).consume()
+    logger.debug(
+        "Constraints ensured", parse_mode=parse_mode, constraints=len(constraints)
+    )
 
 
 async def get_existing_versions(
@@ -83,22 +86,6 @@ async def get_existing_versions(
         return await result.data()
 
 
-async def deactivate_versions(
-    driver: AsyncDriver, database: str, source_id: str
-) -> int:
-    """Set active=false on all versions for a sourceId. Returns count."""
-    query = """
-        MATCH (d:Document {sourceId: $sourceId})
-        WHERE d.active = true
-        SET d.active = false
-        RETURN count(d) AS cnt
-    """
-    async with driver.session(database=database) as session:
-        result = await session.run(query, sourceId=source_id)
-        record = await result.single()
-        return record["cnt"] if record else 0
-
-
 async def write_parsed_document(
     driver: AsyncDriver,
     database: str,
@@ -108,6 +95,9 @@ async def write_parsed_document(
 
     Returns a summary dict with counts.
     """
+    # Validate and create schema before opening the data transaction: Neo4j does
+    # not allow schema and data updates in the same transaction.
+    normalize_document_metadata(doc.metadata)
     await ensure_constraints(
         driver,
         database,
@@ -115,7 +105,17 @@ async def write_parsed_document(
         extract_images=doc.parse_params.get("extract_images", False),
         extract_tables=doc.parse_params.get("extract_tables", False),
     )
+    return await write_document_atomically(
+        driver, database, doc.source_id, doc.id,
+        lambda transaction_driver: _write_parsed_document(transaction_driver, database, doc),
+    )
 
+
+async def _write_parsed_document(
+    driver: AsyncDriver, database: str, doc: ParsedDocument,
+) -> dict[str, Any]:
+    """Write graph records using the caller's single data transaction."""
+    metadata = normalize_document_metadata(doc.metadata)
     # --- Document node ---
     doc_props: dict[str, Any] = {
         "id": doc.id,
@@ -131,10 +131,9 @@ async def write_parsed_document(
         "totalSections": len(doc.sections),
         "createdAt": doc.created_at,
     }
-    # Merge user metadata into document properties
-    for k, v in doc.metadata.items():
-        safe_key = k.replace(" ", "_").replace("-", "_")
-        doc_props[safe_key] = v
+    if doc.source_format is not None:
+        doc_props["sourceFormat"] = doc.source_format
+    doc_props.update(metadata)
 
     async with driver.session(database=database) as session:
         await session.run(
@@ -173,7 +172,8 @@ async def write_parsed_document(
         """
         UNWIND $records AS rec
         CREATE (p:Page)
-        SET p = apoc.map.removeKeys(rec, ['documentId'])
+        SET p = rec
+        REMOVE p.documentId
         WITH p, rec
         MATCH (d:Document {id: rec.documentId})
         CREATE (d)-[:HAS_PAGE]->(p)
@@ -198,13 +198,19 @@ async def write_parsed_document(
 
     # --- Element nodes ---
     elem_records = []
-    for e in doc.elements:
+    for order, e in enumerate(doc.elements):
         rec: dict[str, Any] = {
             "id": e.id,
             "type": e.type,
             "pageNumber": e.page_number,
-            "pageId": f"{doc.id}_page_{e.page_number}",
+            "order": order,
         }
+        if e.page_number is not None:
+            rec["pageId"] = f"{doc.id}_page_{e.page_number}"
+        if not doc.pages:
+            rec["documentId"] = doc.id
+        if e.source_anchor is not None:
+            rec["sourceAnchor"] = e.source_anchor
         if e.text is not None:
             rec["text"] = e.text
         if e.text_as_html is not None:
@@ -220,19 +226,37 @@ async def write_parsed_document(
             rec["fontSizeMax"] = e.font_size_max
         elem_records.append(rec)
 
+    if doc.pages:
+        element_membership = """
+            MATCH (p:Page {id: rec.pageId})
+            CREATE (p)-[:HAS_ELEMENT]->(e)
+        """
+    else:
+        element_membership = """
+            MATCH (d:Document {id: rec.documentId})
+            CREATE (d)-[:HAS_ELEMENT]->(e)
+        """
     await _batch_write(
         driver,
         database,
         """
         UNWIND $records AS rec
         CREATE (e:Element)
-        SET e = apoc.map.removeKeys(rec, ['pageId'])
+        SET e = rec
+        REMOVE e.pageId, e.documentId
         WITH e, rec
-        MATCH (p:Page {id: rec.pageId})
-        CREATE (p)-[:HAS_ELEMENT]->(e)
-        """,
+        """
+        + element_membership,
         elem_records,
     )
+    if not doc.pages:
+        await _create_next_chain(
+            driver,
+            database,
+            "Element",
+            [element.id for element in doc.elements],
+            "NEXT_ELEMENT",
+        )
 
     # NEXT_ELEMENT chains (per page, preserving reading order)
     for p in doc.pages:
@@ -271,22 +295,48 @@ async def write_parsed_document(
 
     # --- Section nodes + hierarchy ---
     if doc.sections:
-        sec_records = [
-            {
-                "id": s.id,
-                "title": s.title,
-                "level": s.level,
-                "documentId": doc.id,
-            }
-            for s in doc.sections
-        ]
+        # Materialize navigation metadata once so outline reads need no content scan.
+        # Page numbers use the same zero-based convention as Elements and Pages.
+        element_pages = {e.id: e.page_number for e in doc.elements}
+        sections_by_id = {section.id: section for section in doc.sections}
+        sec_records = []
+        for order, section in enumerate(doc.sections):
+            pending = [section.id]
+            visited = set()
+            pages = set()
+            while pending:
+                section_id = pending.pop()
+                if section_id in visited:
+                    continue
+                visited.add(section_id)
+                child = sections_by_id.get(section_id)
+                if child is None:
+                    continue
+                pages.update(
+                    element_pages[eid]
+                    for eid in child.element_ids
+                    if element_pages.get(eid) is not None
+                )
+                pending.extend(child.subsection_ids)
+            sec_records.append(
+                {
+                    "id": section.id,
+                    "title": section.title,
+                    "level": section.level,
+                    "order": order,
+                    "pageStart": min(pages) if pages else None,
+                    "pageEnd": max(pages) if pages else None,
+                    "documentId": doc.id,
+                }
+            )
         await _batch_write(
             driver,
             database,
             """
             UNWIND $records AS rec
             CREATE (s:Section)
-            SET s.id = rec.id, s.title = rec.title, s.level = rec.level
+            SET s.id = rec.id, s.title = rec.title, s.level = rec.level,
+                s.order = rec.order, s.pageStart = rec.pageStart, s.pageEnd = rec.pageEnd
             WITH s, rec
             MATCH (d:Document {id: rec.documentId})
             CREATE (d)-[:HAS_SECTION]->(s)
@@ -319,7 +369,9 @@ async def write_parsed_document(
             for s in doc.sections
             if not any(s.id in p.subsection_ids for p in doc.sections)
         ]
-        await _create_next_chain(driver, database, "Section", top_level_ids, "NEXT_SECTION")
+        await _create_next_chain(
+            driver, database, "Section", top_level_ids, "NEXT_SECTION"
+        )
 
         # Also chain subsections within each parent
         for s in doc.sections:
@@ -358,6 +410,105 @@ async def write_parsed_document(
     }
     logger.info("Graph written", **summary)
     return summary
+
+
+class _TransactionSession:
+    """Let existing batched graph writers share one explicit transaction."""
+
+    def __init__(self, transaction):
+        self.transaction = transaction
+
+    async def __aenter__(self):
+        return self.transaction
+
+    async def __aexit__(self, *_):
+        return False
+
+
+class _TransactionDriver:
+    def __init__(self, transaction):
+        self.transaction = transaction
+
+    def session(self, **_):
+        return _TransactionSession(self.transaction)
+
+
+async def write_document_atomically(
+    driver: AsyncDriver,
+    database: str,
+    source_id: str,
+    document_id: str,
+    write: Callable[[Any], Awaitable[dict[str, Any]]],
+) -> dict[str, Any]:
+    """Publish a complete graph and switch its active version in one commit.
+
+    Queries remain batched, but no graph records or active-version changes become
+    visible until all writes succeed. A cancelled/failed transaction rolls back.
+    """
+    async def operation(transaction):
+        summary = await write(_TransactionDriver(transaction))
+        await _activate_document(transaction, source_id, document_id)
+        return summary
+
+    async with driver.session(database=database) as session:
+        return await session.execute_write(operation)
+
+
+async def _activate_document(transaction, source_id: str, document_id: str) -> None:
+    result = await transaction.run(
+        """
+        MATCH (d:Document)
+        WHERE d.id = $documentId OR d.sourceId = $sourceId
+        SET d.active = (d.id = $documentId)
+        """,
+        sourceId=source_id, documentId=document_id,
+    )
+    await result.consume()
+
+
+async def activate_document_version(
+    driver: AsyncDriver, database: str, document_id: str,
+    chunk_set_version: int | None = None,
+) -> int | None:
+    """Switch an existing document/chunk set together, or leave both unchanged."""
+    async def operation(transaction):
+        result = await transaction.run(
+            "MATCH (d:Document {id: $id}) RETURN d.sourceId AS sourceId",
+            id=document_id,
+        )
+        record = await result.single()
+        if record is None:
+            raise ValueError(f"Document not found: {document_id}")
+        count = None
+        if chunk_set_version is not None:
+            result = await transaction.run(
+                """
+                MATCH (c:Chunk)-[:PART_OF]->(:Document {id: $id})
+                WHERE c.chunkSetVersion = $version
+                RETURN count(c) AS count
+                """,
+                id=document_id, version=chunk_set_version,
+            )
+            count = (await result.single())["count"]
+            if not count:
+                raise ValueError(
+                    f"Chunk set v{chunk_set_version} not found for {document_id}; "
+                    "active versions were preserved."
+                )
+        await _activate_document(transaction, record["sourceId"], document_id)
+        if chunk_set_version is not None:
+            result = await transaction.run(
+                """
+                MATCH (c:Chunk)-[:PART_OF]->(:Document {id: $id})
+                SET c.active = coalesce(c.chunkSetVersion = $version, false)
+                """,
+                id=document_id, version=chunk_set_version,
+            )
+            await result.consume()
+        return count
+
+    async with driver.session(database=database) as session:
+        return await session.execute_write(operation)
 
 
 # ---- helpers ----

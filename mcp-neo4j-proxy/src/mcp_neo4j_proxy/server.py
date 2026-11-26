@@ -1,11 +1,17 @@
 import os
 import re
+from importlib.resources import files
 
 from fastmcp import FastMCP
 from fastmcp.client.transports import StdioTransport
 from fastmcp.server import create_proxy
 
 from .report_validator import validate_report
+
+GRAPHRAG_REVISION = files("mcp_neo4j_proxy").joinpath("graphrag_revision.txt").read_text(encoding="utf-8").strip()
+if not re.fullmatch(r"[0-9a-f]{40}", GRAPHRAG_REVISION):
+    raise ValueError("Invalid packaged GraphRAG revision; expected a full Git commit SHA")
+GRAPHRAG_SOURCE = "git+https://github.com/neo4j-field/mcp-neo4j-graphrag@" + GRAPHRAG_REVISION
 
 app = FastMCP("neo4j-mcp-workspace")
 
@@ -119,7 +125,7 @@ app.mount(
     create_proxy(
         StdioTransport(
             command="uvx",
-            args=["mcp-neo4j-graphrag@0.4.1"],
+            args=["--from", GRAPHRAG_SOURCE, "mcp-neo4j-graphrag"],
             env=_docs_env(),
         ),
     ),
@@ -130,7 +136,7 @@ app.mount(
     create_proxy(
         StdioTransport(
             command="uvx",
-            args=["mcp-neo4j-graphrag@0.4.1"],
+            args=["--from", GRAPHRAG_SOURCE, "mcp-neo4j-graphrag"],
             env=_ontology_env(),
         ),
     ),

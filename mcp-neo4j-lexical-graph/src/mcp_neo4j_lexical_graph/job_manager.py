@@ -37,8 +37,8 @@ class JobInfo(BaseModel):
     updated_at: float = Field(default_factory=time.time)
 
     # Parameters
-    path: str = Field(..., description="PDF file or folder path")
-    parse_mode: str = Field(..., description="pymupdf, docling, or page_image")
+    path: str = Field(..., description="Supported document file or folder path")
+    parse_mode: str = Field(..., description="pymupdf, docling, page_image, document, or mixed")
     is_folder: bool = Field(default=False)
 
     # Pre-flight info

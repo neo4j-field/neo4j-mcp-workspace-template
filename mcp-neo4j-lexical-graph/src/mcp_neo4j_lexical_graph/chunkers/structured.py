@@ -25,7 +25,13 @@ from ..graph_reader import (
     get_sections_for_document,
     get_document,
 )
-from .base import BaseChunker, ChunkData, strip_base64_from_text
+from .base import (
+    BaseChunker,
+    ChunkData,
+    strip_base64_from_text,
+    attach_source_locators,
+    section_heading_paths,
+)
 
 logger = structlog.get_logger()
 
@@ -64,10 +70,12 @@ class StructuredChunker(BaseChunker):
 
         # Build element_id -> section heading lookup
         elem_to_heading: dict[str, str] = {}
-        for s in sections:
+        elem_to_context: dict[str, str] = {}
+        for s, context in zip(sections, section_heading_paths(sections)):
             title = s.get("title", "")
-            for eid in (s.get("elementIds") or []):
+            for eid in s.get("elementIds") or []:
                 elem_to_heading[eid] = title
+                elem_to_context[eid] = context
 
         # Fetch captions: target_element_id -> caption_text
         captions = await self._get_captions(driver, database, document_id)
@@ -96,7 +104,11 @@ class StructuredChunker(BaseChunker):
                         element_ids=[eid],
                         document_name=doc_name,
                         section_heading=heading,
-                        section_context=caption_text or heading,
+                        section_context="\n".join(
+                            filter(
+                                None, [elem_to_context.get(eid, heading), caption_text]
+                            )
+                        ),
                         image_base64=e.get("imageBase64") or "",
                         image_mime_type=e.get("imageMimeType") or "",
                         text_as_html=e.get("textAsHtml") or "",
@@ -118,7 +130,11 @@ class StructuredChunker(BaseChunker):
                         element_ids=[eid],
                         document_name=doc_name,
                         section_heading=heading,
-                        section_context=caption_text or heading,
+                        section_context="\n".join(
+                            filter(
+                                None, [elem_to_context.get(eid, heading), caption_text]
+                            )
+                        ),
                         image_base64=e.get("imageBase64") or "",
                         image_mime_type=e.get("imageMimeType") or "",
                         text_as_html=e.get("textAsHtml") or "",
@@ -152,7 +168,14 @@ class StructuredChunker(BaseChunker):
                     element_ids=list(acc_eids),
                     document_name=doc_name,
                     section_heading=acc_heading,
-                    section_context=acc_heading,
+                    section_context="\n".join(
+                        dict.fromkeys(
+                            elem_to_context[eid]
+                            for eid in acc_eids
+                            if elem_to_context.get(eid)
+                        )
+                    )
+                    or acc_heading,
                 )
             )
             acc_texts = []
@@ -202,7 +225,7 @@ class StructuredChunker(BaseChunker):
                         element_ids=[eid],
                         document_name=doc_name,
                         section_heading=current_heading,
-                        section_context=current_heading,
+                        section_context=elem_to_context.get(eid, current_heading),
                     )
                 )
                 continue
@@ -243,6 +266,7 @@ class StructuredChunker(BaseChunker):
 
         # Interleave special chunks at the end (they have their own context)
         all_chunks = text_chunks + special_chunks
+        attach_source_locators(all_chunks, elements)
         for idx, c in enumerate(all_chunks):
             c.index = idx
             c.id = f"{document_id}_chunk_{idx:04d}"

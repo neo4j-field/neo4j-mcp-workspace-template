@@ -38,6 +38,16 @@ _INTEGER_CHARS = re.compile(r"[^\d\-]")
 
 # ── Generic string normalizers ───────────────────────────────────────────────
 
+def _strip(v: Any) -> Any:
+    """Trim string edges without coercion or collapsing internal whitespace."""
+    return v.strip() if isinstance(v, str) else v
+
+
+def _strip_lower(v: Any) -> Any:
+    """Match generated key identity: trim edges then lowercase strings."""
+    return v.strip().lower() if isinstance(v, str) else v
+
+
 def _ws(v: Any) -> str:
     """Collapse internal whitespace and strip."""
     return _WS.sub(" ", str(v)).strip()

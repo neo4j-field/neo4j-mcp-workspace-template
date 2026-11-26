@@ -23,6 +23,7 @@ import multiprocessing
 import os
 import re
 import sys
+import uuid
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from datetime import datetime
@@ -44,6 +45,11 @@ from .chunkers.by_section import BySectionChunker
 from .chunkers.structured import StructuredChunker
 from .chunkers.token_window import TokenWindowChunker
 from .embedder import ChunkEmbedder
+from .embedding_identity import (
+    embedding_space, input_hash, cache_matches, validate_vectors, check_preserved_space,
+    index_info as _embedding_index_info, check_index, ensure_publication_constraint,
+    overlapping_indexes, check_overlaps,
+)
 from .graph_reader import (
     delete_chunks_for_document,
     delete_document_cascade,
@@ -56,12 +62,16 @@ from .graph_reader import (
     list_all_documents,
 )
 from .graph_writer import (
-    deactivate_versions,
+    activate_document_version,
+    ensure_constraints,
+    write_document_atomically,
     get_existing_versions,
     write_parsed_document,
 )
 from .job_manager import JobManager, JobStatus
+from .metadata import normalize_document_metadata
 from .models import ParsedDocument
+from .input_formats import DOCUMENT_FORMATS, SUPPORTED_SUFFIXES, mode_for_path, default_source_id
 from .postprocessing.section_hierarchy import assign_section_hierarchy as _assign_hierarchy
 from .postprocessing.description_generator import generate_descriptions_batch as _generate_descriptions
 
@@ -86,7 +96,6 @@ _TIME_PER_PAGE: dict[str, float] = {
     "pymupdf": 1.5,
     "page_image": 2.5,
     "docling": 15.0,
-    "vlm_blocks": 12.0,
 }
 
 # Threshold (seconds) above which a warning is included in the response
@@ -134,10 +143,14 @@ async def _ensure_vector_index(
             try:
                 await create(plain_query)
             except Exception as plain_exc:
-                raise RuntimeError(
-                    f"Vector index '{index_name}' failed with prefilters ({prefilter_error}) "
-                    f"and without them ({plain_exc})"
-                ) from plain_exc
+                # Concurrent IF NOT EXISTS can still race on schema creation.
+                # Only an equivalent-rule race may proceed to named-index
+                # verification; missing/wrong definitions still fail below.
+                if getattr(plain_exc, "code", None) != "Neo.ClientError.Schema.EquivalentSchemaRuleAlreadyExists":
+                    raise RuntimeError(
+                        f"Vector index '{index_name}' failed with prefilters ({prefilter_error}) "
+                        f"and without them ({plain_exc})"
+                    ) from plain_exc
     else:
         await create(plain_query)
 
@@ -156,6 +169,34 @@ async def _ensure_vector_index(
     statement = record["createStatement"] or ""
     mode = "prefiltered" if " WITH [" in statement.upper() else "plain"
     return {"name": index_name, "state": state, "mode": mode}
+
+
+
+async def _ensure_fulltext_index(driver, database, index_name, node_label, properties):
+    """Consume DDL and verify its named definition; IF NOT EXISTS is not validation."""
+    for identifier in [index_name, node_label, *properties]:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", identifier):
+            raise ValueError(f"Unsafe fulltext identifier: {identifier!r}")
+    props = ", ".join(f"n.`{p}`" for p in properties)
+    async with driver.session(database=database) as session:
+        result = await session.run(
+            f"CREATE FULLTEXT INDEX `{index_name}` IF NOT EXISTS "
+            f"FOR (n:`{node_label}`) ON EACH [{props}]"
+        )
+        await result.consume()
+        result = await session.run(
+            "SHOW FULLTEXT INDEXES YIELD name, state, labelsOrTypes, properties, entityType, failureMessage "
+            "WHERE name = $name RETURN *", name=index_name,
+        )
+        record = await result.single()
+    if record is None:
+        raise RuntimeError(f"Fulltext index '{index_name}' was not created")
+    if (record["entityType"] != "NODE" or record["labelsOrTypes"] != [node_label]
+            or set(record["properties"]) != set(properties)):
+        raise RuntimeError(f"Fulltext index '{index_name}' has an incompatible definition; use a distinct name or explicitly rebuild it")
+    if record["state"] not in {"ONLINE", "POPULATING"}:
+        raise RuntimeError(f"Fulltext index '{index_name}' is {record['state']}: {record.get('failureMessage', '')}")
+    return {"name": index_name, "state": record["state"]}
 
 
 def _suggest_max_workers() -> int:
@@ -218,13 +259,13 @@ def create_mcp_server(
         ),
     )
     async def create_lexical_graph(
-        path: str = Field(..., description="Path to a PDF file or a folder of PDFs"),
+        path: str = Field(..., description="Path to a PDF, Markdown, TXT, local HTML/XHTML or DOCX file, or a mixed folder"),
         output_dir: str = Field(..., description="Directory for logs and manifests"),
         document_id: Optional[str] = Field(
             None, description="Custom sourceId (defaults to filename). Ignored for folders."
         ),
         parse_mode: str = Field(
-            "pymupdf", description="Parse mode: 'pymupdf', 'docling', 'page_image', or 'vlm_blocks' (experimental — prefer docling)"
+            "pymupdf", description="PDF parse mode: pymupdf, docling, page_image. Markdown/TXT/HTML/DOCX automatically use 'document'; explicit 'document' supports non-PDF files only."
         ),
         store_page_images: bool = Field(
             False, description="Render and store page images on Page nodes"
@@ -234,13 +275,10 @@ def create_mcp_server(
             None, description="JSON string of extra Document properties"
         ),
         skip_furniture: bool = Field(
-            True, description="Skip headers/footers (docling and vlm_blocks modes)"
+            True, description="Skip headers/footers (docling/document modes)"
         ),
         extract_sections: bool = Field(
-            True, description="Extract section hierarchy (docling and vlm_blocks modes)"
-        ),
-        extract_toc: bool = Field(
-            True, description="Extract TOC entries (docling mode)"
+            True, description="Extract section hierarchy (docling/document modes)"
         ),
         chunk_size: int = Field(500, description="Target tokens per chunk (pymupdf mode)"),
         chunk_overlap: int = Field(50, description="Token overlap between chunks (pymupdf mode)"),
@@ -250,25 +288,21 @@ def create_mcp_server(
         extract_tables: bool = Field(
             True, description="Extract tables as Element nodes with imageBase64 + text (pymupdf mode)"
         ),
-        max_vlm_parallel: int = Field(
-            10, description="Max concurrent VLM calls per document (vlm_blocks mode)"
-        ),
-        vlm_prompt: Optional[str] = Field(
-            None, description="Custom VLM system prompt override (vlm_blocks mode)"
-        ),
-        text_preview_length: int = Field(
-            200, description="Characters of text preview sent to VLM per block (vlm_blocks mode)"
-        ),
         max_parallel: int = Field(
             0,
             description=(
-                "Max documents to parse concurrently (docling/pymupdf modes). "
+                "Max documents to parse concurrently (all retained modes). "
                 "0 = auto-detect based on available RAM and CPU cores. "
-                "vlm_blocks always runs sequentially."
             ),
         ),
     ) -> str:
-        """Parse PDF(s) and create the lexical graph in Neo4j.
+        """Parse PDF, Markdown, TXT, local HTML/XHTML or DOCX into a lexical graph.
+
+        Non-PDF formats automatically use native document parsing, without PDF
+        rendering or invented pages. Call chunk_lexical_graph afterward; structured
+        chunking preserves heading paths. TXT is literal text, without inferred headings.
+        Local HTML is static content; scripts are not executed and remote assets
+        are not fetched. Source anchors replace page citations for pageless inputs.
 
         Supports document versioning -- if a document with the same sourceId
         already exists, a new version is created and the old one is deactivated.
@@ -278,7 +312,6 @@ def create_mcp_server(
           Set extract_images=False and extract_tables=False for text-only (Document + Chunk only).
         - docling: Full layout analysis with sections, tables, captions. (requires docling extra)
         - page_image: Page images + text. Creates Document + Page nodes for VLM use.
-        - vlm_blocks: [EXPERIMENTAL — prefer docling] PyMuPDF blocks + VLM reading order/classification. Creates Document + Page + Element + Section nodes.
 
         **Returns immediately** with a job_id. Use check_processing_status(job_id) to monitor.
         """
@@ -287,46 +320,69 @@ def create_mcp_server(
             raise ToolError(f"Path not found: {path}")
 
         os.makedirs(output_dir, exist_ok=True)
-        user_metadata = json.loads(metadata_json) if metadata_json else {}
+        try:
+            user_metadata = normalize_document_metadata(json.loads(metadata_json) if metadata_json else {})
+        except (ValueError, TypeError) as exc:
+            raise ToolError(str(exc)) from exc
 
         # -- Pre-flight: count files and pages --
         from .worker import count_pdf_pages
 
         is_folder = p.is_dir()
         if is_folder:
-            pdf_files = sorted(p.glob("*.pdf")) + sorted(p.glob("*.PDF"))
-            if not pdf_files:
-                raise ToolError(f"No PDF files found in {path}")
+            input_files = sorted(
+                (file for file in p.iterdir() if file.is_file() and file.suffix.lower() in SUPPORTED_SUFFIXES),
+                key=lambda file: file.name,
+            )
+            if not input_files:
+                raise ToolError(f"No supported documents found in {path}; supported: {', '.join(sorted(SUPPORTED_SUFFIXES))}")
         else:
             if not p.is_file():
                 raise ToolError(f"Path is neither a file nor a directory: {path}")
-            pdf_files = [p]
+            input_files = [p]
 
-        files_total = len(pdf_files)
-        total_pages = 0
         file_page_counts: list[tuple[str, int]] = []
-        for pdf in pdf_files:
+        file_modes = set()
+        source_formats = set()
+        resolved_sources: dict[str, Path] = {}
+        for source in input_files:
             try:
-                pc = count_pdf_pages(str(pdf))
-            except Exception:
-                pc = 0
-            file_page_counts.append((str(pdf), pc))
-            total_pages += pc
+                file_mode = mode_for_path(source, parse_mode)
+            except ValueError as exc:
+                raise ToolError(str(exc)) from exc
+            source_key = document_id if not is_folder and document_id else default_source_id(source)
+            if source_key in resolved_sources:
+                raise ToolError(
+                    f"Source ID collision between {resolved_sources[source_key].name!r} and {source.name!r}. "
+                    "Rename one file or import them separately with distinct document_id values."
+                )
+            resolved_sources[source_key] = source
+            file_modes.add(file_mode)
+            source_formats.add("pdf" if source.suffix.lower() == ".pdf" else DOCUMENT_FORMATS[source.suffix.lower()])
+            page_count = 0
+            if source.suffix.lower() == ".pdf":
+                try:
+                    page_count = count_pdf_pages(str(source))
+                except Exception:
+                    pass  # The parser records a useful failure for invalid PDFs.
+            file_page_counts.append((str(source), page_count))
+        files_total = len(input_files)
+        total_pages = sum(count for _, count in file_page_counts)
+        pageless_files = sum(source.suffix.lower() != ".pdf" for source in input_files)
+        job_mode = next(iter(file_modes)) if len(file_modes) == 1 else "mixed"
 
         # Resolve effective parallelism for this job
         effective_parallel = max_parallel if max_parallel > 0 else _suggest_max_workers()
-        if parse_mode == "vlm_blocks":
-            effective_parallel = 1  # vlm_blocks is always sequential
 
         # Estimate processing time (adjusted for parallelism)
         rate = _TIME_PER_PAGE.get(parse_mode, 10.0)
         estimated_seconds = (total_pages * rate) / effective_parallel
-        estimated_minutes = round(estimated_seconds / 60, 1)
+        estimated_minutes = None if pageless_files else round(estimated_seconds / 60, 1)
 
         # Create the job
         job = _job_manager.create_job(
             path=str(p),
-            parse_mode=parse_mode,
+            parse_mode=job_mode,
             is_folder=is_folder,
             files_total=files_total,
             source_pages_expected=total_pages,
@@ -342,11 +398,7 @@ def create_mcp_server(
             "extract_tables": extract_tables,
             "skip_furniture": skip_furniture,
             "extract_sections": extract_sections,
-            "extract_toc": extract_toc,
             "store_page_images": store_page_images,
-            "max_vlm_parallel": max_vlm_parallel,
-            "vlm_prompt": vlm_prompt,
-            "text_preview_length": text_preview_length,
         }
 
         # Launch background task
@@ -375,13 +427,16 @@ def create_mcp_server(
             "status": "queued",
             "files_total": files_total,
             "sourcePageCount": total_pages,
+            "pageless_files": pageless_files,
+            "source_formats": sorted(source_formats),
+            "parse_mode": job_mode,
             "estimated_minutes": estimated_minutes,
             "max_parallel": effective_parallel,
             "message": (
                 f"Job queued. Use check_processing_status('{job.id}') to monitor."
             ),
         }
-        if estimated_seconds > _WARNING_THRESHOLD_SECONDS:
+        if not pageless_files and estimated_seconds > _WARNING_THRESHOLD_SECONDS:
             response["warning"] = (
                 f"Processing {files_total} PDF(s) ({total_pages} pages) "
                 f"with {parse_mode} mode. Estimated time: ~{estimated_minutes} minutes."
@@ -654,6 +709,7 @@ def create_mcp_server(
                                 "version": v.get("version"),
                                 "active": v.get("active"),
                                 "parseMode": v.get("parseMode"),
+                                "sourceFormat": v.get("sourceFormat"),
                                 "sourcePageCount": v.get("sourcePageCount"),
                                 "pageNodeCount": v.get("pageNodeCount"),
                                 "elements": v.get("elementCount"),
@@ -738,6 +794,7 @@ def create_mcp_server(
 
             stats = {
                 "parseMode": parse_mode,
+                "sourceFormat": doc.get("sourceFormat"),
                 "sourcePageCount": doc.get("totalPages", len(pages)),
                 "pageNodeCount": len(pages),
                 "elements": len(elements),
@@ -785,7 +842,7 @@ def create_mcp_server(
 
             # --- Structural checks (docling / page_image modes) ---
 
-            if parse_mode not in ("pymupdf", "text_only"):
+            if parse_mode not in ("pymupdf", "text_only", "document"):
                 # Orphan elements (not connected to any page)
                 async with neo4j_driver.session(database=database) as session:
                     result = await session.run(
@@ -925,6 +982,25 @@ def create_mcp_server(
                         md_lines.append(f"**Extracted text:**\n\n{text}\n")
                     md_lines.append("")
 
+            elif parse_mode == "document":
+                # Preserve logical source order without fabricating a physical page.
+                if doc.get("sourceFormat") == "text":
+                    body = "".join(e.get("text") or "" for e in elements)
+                    fence = "`" * max(3, 1 + max((len(run) for run in re.findall(r"`+", body)), default=0))
+                    md_lines.append(f"{fence}text\n{body}\n{fence}\n")
+                else:
+                    for element in elements:
+                        text = element.get("text") or ""
+                        kind = element.get("type")
+                        if kind == "heading":
+                            md_lines.append(f"{'#' * (element.get('level') or 1)} {text}\n")
+                        elif kind == "list_item":
+                            md_lines.append(f"- {text}\n")
+                        else:
+                            md_lines.append(text + "\n")
+                        if element.get("imageBase64"):
+                            mime = element.get("imageMimeType") or "image/png"
+                            md_lines.append(f"![{element['id']}](data:{mime};base64,{element['imageBase64']})\n")
             else:
                 # Reconstruct from pages/elements (docling mode)
                 # Build element image lookup
@@ -1296,16 +1372,22 @@ def create_mcp_server(
             None,
             description=(
                 "Filter to a specific document: only embeds nodes where documentName = document_id. "
-                "None = all active nodes without embeddings."
+                "None = all active inputs, regenerating stale or unverifiable embeddings."
             ),
         ),
         overwrite: bool = Field(
             False,
-            description="Re-embed nodes that already have embeddings. Default: false (skip already-embedded nodes).",
+            description="Force re-embedding. Otherwise reuse only embeddings with matching input, model, provider and dimension identity.",
         ),
         parallel: int = Field(10, description="Max concurrent embedding batches"),
         model: str = Field(
             default=embedding_model, description="Embedding model (via LiteLLM)"
+        ),
+        dimensions: Optional[int] = Field(
+            None, description="Optional dimensions sent to the embedding provider. Must match an existing named index.",
+        ),
+        include_inactive: bool = Field(
+            False, description="Include inactive Chunk nodes in a label-wide refresh, needed when migrating all vectors in an index.",
         ),
         create_fulltext_index: bool = Field(
             True, description=(
@@ -1382,136 +1464,153 @@ def create_mcp_server(
                 pass  # detection failure is non-fatal, proceed with original values
 
         try:
-            # Build text expression: COALESCE when fallback is provided
-            if text_property_fallback:
-                text_expr = f"coalesce(c.`{text_property}`, c.`{text_property_fallback}`)"
-                text_not_null = f"(c.`{text_property}` IS NOT NULL OR c.`{text_property_fallback}` IS NOT NULL)"
-            else:
-                text_expr = f"c.`{text_property}`"
-                text_not_null = f"c.`{text_property}` IS NOT NULL"
-
-            # Build context concatenation dynamically
-            context_parts = " + ' ' + ".join(
-                f"coalesce(c.`{p}`, '')" for p in context_properties
-            )
-            if context_parts:
-                composed_text = f"trim({context_parts} + ' ' + {text_expr})"
-            else:
-                composed_text = text_expr
-
-            # Build WHERE clause
+            if parallel < 1:
+                raise ValueError("parallel must be positive")
+            for name in [node_label, text_property, *(context_properties or []), *(index_prefilter_properties or []), *([text_property_fallback] if text_property_fallback else [])]:
+                if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                    raise ValueError(f"Unsafe embedding identifier: {name!r}")
+            fulltext_index = None
+            if create_fulltext_index:
+                ft_props = list(dict.fromkeys([text_property, *([text_property_fallback] if text_property_fallback else [])]))
+                fulltext_index = await _ensure_fulltext_index(
+                    neo4j_driver, database, f"{node_label.lower()}_text_fulltext", node_label, ft_props,
+                )
+            space = embedding_space(model, dimensions)
             embedding_prop = "text_embedding"
+            index_name = f"{node_label.lower()}_{embedding_prop}"
+            text_expr = (f"coalesce(c.`{text_property}`, c.`{text_property_fallback}`)"
+                         if text_property_fallback else f"c.`{text_property}`")
+            text_not_null = (f"(c.`{text_property}` IS NOT NULL OR c.`{text_property_fallback}` IS NOT NULL)"
+                             if text_property_fallback else f"c.`{text_property}` IS NOT NULL")
+            context_parts = " + ' ' + ".join(f"coalesce(c.`{p}`, '')" for p in context_properties)
+            composed_text = f"trim({context_parts} + ' ' + {text_expr})" if context_parts else text_expr
             where_clauses = [text_not_null]
-            if not overwrite:
-                where_clauses.append(f"c.`{embedding_prop}` IS NULL")
+            params = {}
             if document_id:
                 where_clauses.append("c.documentName = $document_id")
-            elif node_label == "Chunk":
-                # active filter is only meaningful for Chunk nodes (versioned)
-                where_clauses.append("coalesce(c.active, true) = true")
-
-            where_str = " AND ".join(where_clauses)
-
-            # Use elementId(c) as the stable identifier — works for any node label
-            # including entity nodes that have no 'id' property.
-            query = f"""
-                MATCH (c:`{node_label}`)
-                WHERE {where_str}
-                RETURN elementId(c) AS eid,
-                  {composed_text} AS text
-            """
-            params: dict[str, Any] = {}
-            if document_id:
                 params["document_id"] = document_id
-
+            elif node_label == "Chunk" and not include_inactive:
+                where_clauses.append("coalesce(c.active, true) = true")
+            where_str = " AND ".join(where_clauses)
+            scope_where = " AND ".join(where_clauses[1:]) or "true"
+            vector_fields = (
+                "elementId(c) AS eid, size(c.text_embedding) AS vector_dims, "
+                "c.embeddingSpace AS space, c.embeddingModel AS cached_model, "
+                "c.embeddingProvider AS provider, c.embeddingDimensions AS dims, "
+                "c.embeddingInputHash AS input_hash, labels(c) AS labels"
+            )
+            query = (f"CYPHER 25 MATCH (c:`{node_label}`) WHERE {where_str} RETURN "
+                     + vector_fields + f", {composed_text} AS text")
+            global_query = (f"CYPHER 25 MATCH (c:`{node_label}`) WHERE c.text_embedding IS NOT NULL RETURN "
+                            + vector_fields)
             async with neo4j_driver.session(database=database) as session:
-                result = await session.run(query, **params)
-                records = await result.data()
-
+                records = await (await session.run(query, **params)).data()
+                indexed = await (await session.run(global_query)).data()
+                existing_index = await _embedding_index_info(session, index_name)
+                missing_inputs = await (await session.run(
+                    f"MATCH (c:`{node_label}`) WHERE {scope_where} AND c.text_embedding IS NOT NULL "
+                    f"AND NOT ({text_not_null}) RETURN count(c) AS missing_inputs", **params,
+                )).single()
+            if missing_inputs is None or missing_inputs["missing_inputs"]:
+                raise RuntimeError(
+                    "Indexed nodes in the requested scope have no usable embedding input. "
+                    "Restore input or explicitly remove obsolete embeddings; no provider request was made."
+                )
+            check_index(existing_index, node_label, dimensions)
             if not records:
-                # Embeddings can be present while index creation failed on an
-                # earlier run. Repair the index even when no model call is due.
-                async with neo4j_driver.session(database=database) as session:
-                    result = await session.run(
-                        f"CYPHER 25 MATCH (c:`{node_label}`) "
-                        f"WHERE c.`{embedding_prop}` IS NOT NULL "
-                        f"RETURN size(c.`{embedding_prop}`) AS dims LIMIT 1"
-                    )
-                    existing = await result.single()
-                if existing:
-                    index_name = f"{node_label.lower()}_{embedding_prop}"
-                    vector_index = await _ensure_vector_index(
-                        neo4j_driver, database, index_name, node_label,
-                        embedding_prop, existing["dims"],
-                        index_prefilter_properties or [],
-                    )
-                    return json.dumps({
-                        "status": "success",
-                        "message": f"No {node_label} nodes need embedding; vector index verified.",
-                        "embedded": 0,
-                        "vector_index": index_name,
-                        "vector_index_mode": vector_index["mode"],
-                        "vector_index_state": vector_index["state"],
-                    })
                 return json.dumps({
-                    "status": "no_work",
-                    "message": f"No {node_label} nodes have embeddings to index.",
-                    "embedded": 0,
-                    "vector_index": None,
+                    "status": "no_work", "embedded": 0, "vector_index": None,
+                    "fulltext_index": fulltext_index,
+                    "message": "No eligible source inputs in this scope; no cache identity was assumed.",
                 })
-
-            logger.info(f"Embedding {len(records)} {node_label} nodes")
-
-            embedder = ChunkEmbedder(model=model)
-            pairs = [(r["eid"], r["text"]) for r in records]
-            embedded = await embedder.embed_many(pairs, parallel=parallel)
-
-            # Write embeddings using native VECTOR type, matched by elementId
-            total_updated = 0
-            dims = len(embedded[0][1]) if embedded else 0
-            batch_size = 100
-            for i in range(0, len(embedded), batch_size):
-                batch = [{"eid": eid, "embedding": emb} for eid, emb in embedded[i : i + batch_size]]
-                async with neo4j_driver.session(database=database) as session:
-                    result = await session.run(
-                        f"""
-                        CYPHER 25
-                        UNWIND $embeddings AS item
-                        MATCH (c:`{node_label}`)
-                        WHERE elementId(c) = item.eid
-                        SET c.`{embedding_prop}` = vector(item.embedding, $dims, FLOAT32)
-                        RETURN count(c) AS updated
-                        """,
-                        embeddings=batch,
-                        dims=dims,
-                    )
-                    record = await result.single()
-                    total_updated += record["updated"] if record else 0
-
-            # Create vector index
-            index_name = f"{node_label.lower()}_{embedding_prop}"
-            vector_index = None
-            if dims > 0:
+            if any(not isinstance(r["text"], str) for r in records):
+                raise RuntimeError("Every embedding input must compose to a string")
+            pending = [r for r in records if overwrite or not cache_matches(r, space)]
+            pending_ids = {r["eid"] for r in pending}
+            preserved_dims = check_preserved_space(indexed, pending_ids, space, dimensions)
+            if not pending:
+                if len(preserved_dims) != 1:
+                    raise RuntimeError("Cached vectors have no single verified dimension")
+                dims = next(iter(preserved_dims))
+                check_index(existing_index, node_label, dims)
                 vector_index = await _ensure_vector_index(
                     neo4j_driver, database, index_name, node_label, embedding_prop,
                     dims, index_prefilter_properties or [],
                 )
+                async with neo4j_driver.session(database=database) as session:
+                    check_index(await _embedding_index_info(session, index_name), node_label, dims)
+                return json.dumps({
+                    "status": "success", "embedded": 0, "skipped": len(records),
+                    "model": model, "provider": space.provider, "dimensions": dims,
+                    "vector_index": index_name, "vector_index_mode": vector_index["mode"],
+                    "vector_index_state": vector_index["state"],
+                    "fulltext_index": fulltext_index,
+                    "message": "All selected embeddings match exact input/model/provider/dimension identity; vector index verified.",
+                })
+            # Privilege/constraint failures happen before a billable provider call.
+            async with neo4j_driver.session(database=database) as session:
+                overlaps = await overlapping_indexes(session, index_name, pending)
+                check_overlaps(overlaps, pending, space, dimensions)
+                await ensure_publication_constraint(session)
+            embedder = ChunkEmbedder(model=model, dimensions=dimensions)
+            embedded = await embedder.embed_many([(r["eid"], r["text"]) for r in pending], parallel=parallel)
+            dims = validate_vectors(pending, embedded, dimensions)
+            check_preserved_space(indexed, pending_ids, space, dims)
+            check_index(existing_index, node_label, dims)
+            check_overlaps(overlaps, pending, space, dims)
+            # Establish/verify the immutable index dimensions before data writes.
+            # No index is dropped. An empty index may remain after a later failure.
+            vector_index = await _ensure_vector_index(
+                neo4j_driver, database, index_name, node_label, embedding_prop,
+                dims, index_prefilter_properties or [],
+            )
+            async with neo4j_driver.session(database=database) as session:
+                check_index(await _embedding_index_info(session, index_name), node_label, dims)
+            by_id = {r["eid"]: r for r in pending}
+            batch = [{"eid": eid, "text": by_id[eid]["text"], "hash": input_hash(by_id[eid]["text"]),
+                      "embedding": vector} for eid, vector in embedded]
 
-            if create_fulltext_index:
-                # Index the resolved text property(ies) for fulltext search
-                ft_props = [text_property]
-                if text_property_fallback and text_property_fallback not in ft_props:
-                    ft_props.append(text_property_fallback)
-                fulltext_index_name = f"{node_label.lower()}_text_fulltext"
-                ft_prop_list = ", ".join(f"c.`{p}`" for p in ft_props)
-                try:
-                    async with neo4j_driver.session(database=database) as session:
-                        await session.run(
-                            f"CREATE FULLTEXT INDEX `{fulltext_index_name}` IF NOT EXISTS "
-                            f"FOR (c:`{node_label}`) ON EACH [{ft_prop_list}]"
-                        )
-                except Exception as e:
-                    logger.warning(f"Fulltext index note: {e}")
+            publication_token = uuid.uuid4().hex
+            async def publish(tx):
+                lock = await (await tx.run(
+                    "MERGE (lock:EmbeddingPublicationLock {indexName:$name}) "
+                    "ON CREATE SET lock.token=$token "
+                    "SET lock.generation=coalesce(lock.generation, 0)+1 RETURN lock.token AS token",
+                    name=index_name, token=publication_token,
+                )).single()
+                if lock is None or lock["token"] != publication_token:
+                    raise RuntimeError("Reserved embedding publication lock already contains committed data; inspect it before retrying")
+                current = await (await tx.run(
+                    f"CYPHER 25 MATCH (c:`{node_label}`) WHERE elementId(c) IN $ids AND {where_str} "
+                    "WITH c ORDER BY elementId(c) "
+                    "SET c.text_embedding=c.text_embedding "
+                    f"RETURN {vector_fields}, {composed_text} AS text",
+                    ids=list(pending_ids), **params,
+                )).data()
+                if sorted((r["eid"], r["text"]) for r in current) != sorted((r["eid"], r["text"]) for r in pending):
+                    raise RuntimeError("Embedding source input changed during provider work; no vectors were written")
+                check_overlaps(await overlapping_indexes(tx, index_name, current), current, space, dims)
+                current_vectors = await (await tx.run(global_query)).data()
+                check_preserved_space(current_vectors, pending_ids, space, dims)
+                result = await tx.run(f"""
+                    CYPHER 25 UNWIND $embeddings AS item
+                    MATCH (c:`{node_label}`) WHERE elementId(c)=item.eid
+                    SET c.text_embedding=vector(item.embedding, $dims, FLOAT32),
+                        c.embeddingModel=$model, c.embeddingProvider=$provider,
+                        c.embeddingDimensions=$dims, c.embeddingInputHash=item.hash,
+                        c.embeddingSpace=$space
+                    RETURN count(c) AS updated
+                """, embeddings=batch, dims=dims, model=model, provider=space.provider, space=space.fingerprint)
+                record = await result.single()
+                if record is None or record["updated"] != len(batch):
+                    raise RuntimeError("Embedding publication did not update every selected node")
+                await (await tx.run(
+                    "MATCH (lock:EmbeddingPublicationLock {indexName:$name}) DELETE lock", name=index_name,
+                )).consume()
+                return record["updated"]
+
+            async with neo4j_driver.session(database=database) as session:
+                total_updated = await session.execute_write(publish)
 
             prefilter_props = index_prefilter_properties or []
             prefilter_msg = f" ({vector_index['mode']}, {vector_index['state']})" if vector_index else " (no embeddings)"
@@ -1530,11 +1629,15 @@ def create_mcp_server(
                     "index_prefilter_properties": prefilter_props,
                     "auto_detected_fallback": auto_detected_fallback,
                     "model": model,
+                    "provider": space.provider,
+                    "skipped": len(records) - len(pending),
+                    "include_inactive": include_inactive,
                     "embedded": total_updated,
                     "dimensions": dims,
                     "vector_index": index_name,
                     "vector_index_mode": vector_index["mode"] if vector_index else None,
                     "vector_index_state": vector_index["state"] if vector_index else None,
+                    "fulltext_index": fulltext_index,
                     "message": (
                         f"Embedded {total_updated} {node_label} nodes (VECTOR FLOAT32, {dims}d). "
                         f"Vector index '{index_name}'{prefilter_msg} "
@@ -1578,36 +1681,11 @@ def create_mcp_server(
             if not doc:
                 raise ToolError(f"Document not found: {document_id}")
 
-            source_id = doc.get("sourceId", document_id)
-
-            # Deactivate all versions, then activate the target
-            await deactivate_versions(neo4j_driver, database, source_id)
-            async with neo4j_driver.session(database=database) as session:
-                await session.run(
-                    "MATCH (d:Document {id: $id}) SET d.active = true",
-                    id=document_id,
-                )
-
+            cnt = await activate_document_version(
+                neo4j_driver, database, document_id, chunk_set_version
+            )
             msg = f"Activated document version {document_id}."
-
-            # Optionally set chunk version
             if chunk_set_version is not None:
-                await deactivate_chunks_for_document(
-                    neo4j_driver, database, document_id
-                )
-                async with neo4j_driver.session(database=database) as session:
-                    result = await session.run(
-                        """
-                        MATCH (c:Chunk)-[:PART_OF]->(d:Document {id: $docId})
-                        WHERE c.chunkSetVersion = $ver
-                        SET c.active = true
-                        RETURN count(c) AS cnt
-                        """,
-                        docId=document_id,
-                        ver=chunk_set_version,
-                    )
-                    rec = await result.single()
-                    cnt = rec["cnt"] if rec else 0
                 msg += f" Activated chunk set v{chunk_set_version} ({cnt} chunks)."
 
             return json.dumps({"status": "success", "message": msg})
@@ -1759,64 +1837,54 @@ def _remap_version_in_result(
     This rewrites them so parsed results can be written with the correct version
     even if the version changed between parse time and write time.
     """
-    import json as _json
     import copy
 
-    old_suffix = f"_v{old_version}"
-    new_suffix = f"_v{new_version}"
+    result = copy.deepcopy(worker_result)
+    old_prefix = f"{source_id}_v{old_version}"
+    new_prefix = f"{source_id}_v{new_version}"
 
-    parse_mode = worker_result.get("parse_mode", "")
+    def identifier(value):
+        if isinstance(value, str) and (value == old_prefix or value.startswith(old_prefix + "_")):
+            return new_prefix + value[len(old_prefix):]
+        return value
 
-    if parse_mode == "pymupdf":
-        result = copy.deepcopy(worker_result)
-        old_doc_id = f"{source_id}_v{old_version}"
-        new_doc_id = f"{source_id}_v{new_version}"
-
-        # Remap doc_id
-        if result.get("doc_id") == old_doc_id:
-            result["doc_id"] = new_doc_id
-
-        # Remap doc_props
-        if "doc_props" in result:
-            props = result["doc_props"]
-            if props.get("id") == old_doc_id:
-                props["id"] = new_doc_id
-            if "version" in props:
-                props["version"] = new_version
-
-        # Remap element records
-        for rec in result.get("element_records", []):
-            if "id" in rec and old_suffix in rec["id"]:
-                rec["id"] = rec["id"].replace(old_suffix, new_suffix, 1)
-
-        # Remap chunk records
+    if result.get("parse_mode") == "pymupdf":
+        result["doc_id"] = identifier(result.get("doc_id"))
+        result["version"] = new_version
+        props = result.get("doc_props", {})
+        props["id"] = identifier(props.get("id"))
+        props["version"] = new_version
+        asset_ids = {}
+        for record in result.get("element_records", []):
+            original = record.get("id")
+            record["id"] = identifier(original)
+            asset_ids[original] = record["id"]
         for chunk in result.get("chunks", []):
-            if "id" in chunk and old_suffix in chunk["id"]:
-                chunk["id"] = chunk["id"].replace(old_suffix, new_suffix, 1)
-            # Chunk text may contain element references -- leave text as-is
-            # (element placeholders reference element IDs, remap those too)
-            for key in ("hasElementIds",):
-                if key in chunk and isinstance(chunk[key], list):
-                    chunk[key] = [
-                        eid.replace(old_suffix, new_suffix, 1) if old_suffix in eid else eid
-                        for eid in chunk[key]
-                    ]
-
+            chunk["id"] = identifier(chunk.get("id"))
+            if "hasElementIds" in chunk:
+                chunk["hasElementIds"] = [identifier(eid) for eid in chunk["hasElementIds"]]
+            # Rewrite only generated visual references, not arbitrary source text.
+            chunk["text"] = re.sub(
+                r"\[(IMAGE|TABLE):\s*([^\]]+)\]",
+                lambda match: f"[{match[1]}: {asset_ids[match[2]]}]" if match[2] in asset_ids else match[0],
+                chunk.get("text") or "",
+            )
         return result
 
-    else:
-        # docling / page_image: the entire parsed_doc is a dict
-        # Serialize to JSON, do a global string replace on the version suffix, deserialize
-        raw = _json.dumps(worker_result)
-        old_id_prefix = f"{source_id}_v{old_version}"
-        new_id_prefix = f"{source_id}_v{new_version}"
-        raw = raw.replace(old_id_prefix, new_id_prefix)
-        # Also fix the version integer in the document properties
-        raw = raw.replace(
-            f'"version": {old_version}',
-            f'"version": {new_version}',
-        )
-        return _json.loads(raw)
+    document = result["parsed_doc"]
+    document["id"] = identifier(document["id"])
+    document["version"] = new_version
+    for page in document.get("pages", []):
+        page["element_ids"] = [identifier(eid) for eid in page.get("element_ids", [])]
+    for element in document.get("elements", []):
+        element["id"] = identifier(element["id"])
+        if element.get("caption_target_id"):
+            element["caption_target_id"] = identifier(element["caption_target_id"])
+    for section in document.get("sections", []):
+        section["id"] = identifier(section["id"])
+        for key in ("element_ids", "subsection_ids"):
+            section[key] = [identifier(value) for value in section.get(key, [])]
+    return result
 
 
 async def _run_job(
@@ -1837,13 +1905,12 @@ async def _run_job(
     """Background task that orchestrates parallel-parse, sequential-write processing.
 
     Files are parsed in batches of max_parallel concurrently (using the process pool),
-    then each result is written to Neo4j sequentially (keeps version handling atomic).
-    vlm_blocks always runs sequentially (async parser, cannot run in subprocess).
+    then each result is published in its own atomic Neo4j data transaction.
 
     For each file:
       1. Submit parsing to subprocess (tentative version=1)
       2. After all batch parses complete, write each result sequentially
-      3. Determine real version atomically (right before write)
+      3. Select a version immediately before writing; uniqueness guards collisions
       4. Remap IDs if version changed, write to Neo4j with retry
       5. Update job progress
     """
@@ -1851,10 +1918,7 @@ async def _run_job(
 
     loop = asyncio.get_running_loop()
     progress_queue: multiprocessing.Queue = multiprocessing.Queue()
-    worker_kwargs = {
-        k: v for k, v in parse_kwargs.items()
-        if k not in ("max_vlm_parallel", "vlm_prompt", "text_preview_length")
-    }
+    worker_kwargs = dict(parse_kwargs)
 
     try:
         # Process files in batches of max_parallel
@@ -1876,7 +1940,8 @@ async def _run_job(
 
             for pdf_path, page_count in batch:
                 pdf_name = Path(pdf_path).name
-                source_id = document_id if (not is_folder and document_id) else Path(pdf_path).stem
+                file_mode = mode_for_path(pdf_path, parse_mode)
+                source_id = document_id if (not is_folder and document_id) else default_source_id(pdf_path)
                 batch_infos.append((pdf_path, page_count, source_id))
 
                 current_file_label = (
@@ -1894,48 +1959,23 @@ async def _run_job(
                     "Submitting for parsing",
                     job_id=job_id,
                     file=pdf_name,
-                    mode=parse_mode,
+                    mode=file_mode,
                     batch_size=batch_size,
                 )
 
-                if parse_mode == "vlm_blocks":
-                    # VLM blocks: async parser, runs in the event loop (not subprocess)
-                    from .parsers.vlm_blocks import VLMBlocksParser
-
-                    vlm_parser = VLMBlocksParser(
-                        vlm_model=extraction_model,
-                        max_parallel=parse_kwargs.get("max_vlm_parallel", 10),
+                parse_futures.append(
+                    loop.run_in_executor(
+                        process_pool,
+                        _make_worker_call(
+                            pdf_path=pdf_path,
+                            source_id=source_id,
+                            version=1,  # tentative; remapped at write time
+                            parse_mode=file_mode,
+                            progress_queue=progress_queue,
+                            **worker_kwargs,
+                        ),
                     )
-                    parsed_doc = await vlm_parser.parse_async(
-                        pdf_path=pdf_path,
-                        source_id=source_id,
-                        version=1,
-                        metadata=parse_kwargs.get("metadata"),
-                        dpi=parse_kwargs.get("dpi", 150),
-                        store_page_images=parse_kwargs.get("store_page_images", False),
-                        vlm_prompt=parse_kwargs.get("vlm_prompt"),
-                        skip_furniture=parse_kwargs.get("skip_furniture", True),
-                        extract_sections=parse_kwargs.get("extract_sections", True),
-                        text_preview_length=parse_kwargs.get("text_preview_length", 200),
-                    )
-                    # Wrap as a resolved future so the gather below works uniformly
-                    fut: asyncio.Future[Any] = loop.create_future()
-                    fut.set_result({"parse_mode": "vlm_blocks", "parsed_doc": parsed_doc.model_dump()})
-                    parse_futures.append(fut)
-                else:
-                    parse_futures.append(
-                        loop.run_in_executor(
-                            process_pool,
-                            _make_worker_call(
-                                pdf_path=pdf_path,
-                                source_id=source_id,
-                                version=1,  # tentative; remapped at write time
-                                parse_mode=parse_mode,
-                                progress_queue=progress_queue,
-                                **worker_kwargs,
-                            ),
-                        )
-                    )
+                )
 
             # Wait for all parse tasks in this batch (exceptions are returned, not raised)
             batch_results = await asyncio.gather(*parse_futures, return_exceptions=True)
@@ -1973,12 +2013,20 @@ async def _run_job(
                 job_manager.update_progress(job_id, current_stage="writing")
 
                 try:
-                    # Atomically determine real version (right before write)
+                    # Select the next version; the unique Document id guards concurrent writers.
                     existing = await get_existing_versions(neo4j_driver, database, source_id)
                     real_version = 1
                     if existing:
+                        # An automatically generated ID must not silently treat a different
+                        # file-format family as a replacement. Explicit IDs opt into that.
+                        if not (not is_folder and document_id):
+                            incoming_document = worker_result.get("parse_mode") == "document"
+                            if any((item.get("parseMode") == "document") != incoming_document for item in existing):
+                                raise ValueError(
+                                    f"Default source ID {source_id!r} already belongs to another input format. "
+                                    "Use an explicit document_id or rename the input; prior versions were preserved."
+                                )
                         real_version = max(v["version"] for v in existing) + 1
-                        await deactivate_versions(neo4j_driver, database, source_id)
 
                     if real_version != 1:
                         logger.info(
@@ -2066,7 +2114,8 @@ async def _run_job(
                 "timestamp": datetime.now().isoformat(),
                 "folder_path": job.path,
                 "parse_mode": parse_mode,
-                "total_pdfs": job.files_total,
+                "total_files": job.files_total,
+                "total_pdfs": sum(Path(file).suffix.lower() == ".pdf" for file, _ in file_page_counts),
                 "successful": job.files_completed,
                 "errors": job.files_failed,
                 "documents_created": job.documents_created,
@@ -2137,9 +2186,19 @@ async def _write_worker_result_to_neo4j(
     parse_mode = worker_result["parse_mode"]
 
     if parse_mode == "pymupdf":
-        return await _write_pymupdf_result(driver, database, worker_result)
+        await ensure_constraints(
+            driver, database, parse_mode="pymupdf",
+            extract_images=bool(worker_result["fig_counter"]),
+            extract_tables=bool(worker_result["tbl_counter"]),
+        )
+        return await write_document_atomically(
+            driver, database, source_id, worker_result["doc_id"],
+            lambda transaction_driver: _write_pymupdf_result(
+                transaction_driver, database, worker_result
+            ),
+        )
     else:
-        # docling, page_image, or vlm_blocks -- reconstruct ParsedDocument from dict
+        # docling, page_image, or document -- reconstruct ParsedDocument from dict
         parsed = ParsedDocument.model_validate(worker_result["parsed_doc"])
         summary = await write_parsed_document(driver, database, parsed)
         return summary
@@ -2516,6 +2575,8 @@ async def _chunk_single_document(
                 "documentName": c.document_name,
                 "sectionHeading": c.section_heading,
                 "sectionContext": c.section_context,
+                "sourceFormat": c.source_format,
+                "sourceAnchors": c.source_anchors,
                 "imageBase64": c.image_base64 or None,
                 "imageMimeType": c.image_mime_type or None,
                 "textAsHtml": c.text_as_html or None,
@@ -2540,6 +2601,8 @@ async def _chunk_single_document(
                     c.documentName = rec.documentName,
                     c.sectionHeading = rec.sectionHeading,
                     c.sectionContext = rec.sectionContext,
+                    c.sourceFormat = rec.sourceFormat,
+                    c.sourceAnchors = rec.sourceAnchors,
                     c.imageBase64 = rec.imageBase64,
                     c.imageMimeType = rec.imageMimeType,
                     c.textAsHtml = rec.textAsHtml
@@ -2552,6 +2615,8 @@ async def _chunk_single_document(
                 )
                 WITH c, rec
                 MATCH (d:Document {id: rec.documentId})
+                SET c.documentName = coalesce(d.name, rec.documentName, d.id),
+                    c.sourceFormat = coalesce(d.sourceFormat, rec.sourceFormat)
                 CREATE (c)-[:PART_OF]->(d)
                 RETURN count(c) AS cnt
                 """,

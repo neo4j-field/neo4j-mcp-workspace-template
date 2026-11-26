@@ -1,13 +1,14 @@
 ---
 name: develop-neo4j-graph
-description: "Develop Neo4j graphs end-to-end: analyze source data, design data models, ingest CSV and/or PDF data, extract entities, and validate with queries. Use when importing data to Neo4j, designing graph data models, creating knowledge graphs, or building chatbots or analytical applications backed by Neo4j."
+description: "Develop Neo4j graphs end-to-end from CSV and documents (PDF, Markdown, TXT, local HTML, DOCX): analyze sources, design data models, ingest, extract entities, and validate with queries. Use when importing data to Neo4j, designing graph models, creating knowledge graphs, or building graph-backed chatbots and analytical applications."
 ---
 
 # Develop Neo4j Graph
 
 ## Pre-flight: Confirm Models
 
-Before starting, read `.env` and report the configured models:
+Before starting, selectively parse only these nonsecret model settings from `.env`
+and report them. Never display the complete file or read/print passwords or API keys:
 - `EMBEDDING_MODEL` — used by `embed_chunks`
 - `EXTRACTION_MODEL` — used by `extract_entities`
 
@@ -25,11 +26,11 @@ Copy this checklist to track progress:
 - [ ] Step 1: Discovery — read source data, identify entities
 - [ ] Step 2: Use case discussion → determine MODE (CHATBOT or ANALYTICAL)
 - [ ] Step 3: Graph data model
-- [ ] Step 4: Ingest data (CSV and/or PDF)
+- [ ] Step 4: Ingest data (CSV and/or documents)
 - [ ] Step 4.5: Verify ingestion counts
-- [ ] Step 5 [PDF only]: Export schema and review validators
-- [ ] Step 6 [PDF only]: Extract entities
-- [ ] Step 7 [PDF only]: Verify extraction results
+- [ ] Step 5 [documents only]: Export schema and review validators
+- [ ] Step 6 [documents only]: Extract entities
+- [ ] Step 7 [documents only]: Verify extraction results
 - [ ] Step 8: Output [MODE-SPECIFIC]
 ```
 
@@ -40,6 +41,10 @@ Copy this checklist to track progress:
 Read source data samples to understand content and structure. Do not use MCP tools at this stage.
 
 **CSV data:** Read samples from `data/csv/`. Reference [HANDLE_STRUCTURED_DATA.md](./references/HANDLE_STRUCTURED_DATA.md) for discovery guidance, including the cross-file ID consistency check.
+
+**Markdown/TXT/HTML/DOCX:** Read samples from `data/documents/` or the supplied
+absolute paths. Use [DOCUMENT_MODE.md](./references/DOCUMENT_MODE.md) for native
+format parsing, chunking and truthful source citations without invented pages.
 
 **PDF data:** List files in `data/pdf/` using Shell: `find data/pdf -name "*.pdf" | sort`. (Use Shell rather than file-picker/glob tools — `data/pdf/` is gitignored so those tools may not see PDFs.) For each PDF, use the Read tool with `pages: "1-2"` to sample content; if the Read tool is blocked by gitignore, fall back to Shell: `uv run --with pymupdf python3 -c "import fitz; doc=fitz.open('data/pdf/FILENAME.pdf'); print(doc[0].get_text()[:2000])"`. Reference the Parse Mode Guide in [HANDLE_UNSTRUCTURED_DATA.md](./references/HANDLE_UNSTRUCTURED_DATA.md) to identify the appropriate parse mode for each document type.
 
@@ -68,10 +73,10 @@ To determine the mode, ask yourself: *does the user describe how someone will in
 
 Reference [GRAPH_DATA_MODELING_MCP.md](./references/GRAPH_DATA_MODELING_MCP.md) for the full modeling process using the `neo4j-data-modeling` MCP server.
 
-**If handling both CSV and PDF data**, design four distinct sub-models, each visualized separately with `get_mermaid_config_str`:
+**If handling both CSV and document data**, design four distinct sub-models, each visualized separately with `get_mermaid_config_str`:
 
 1. **Structured data model** — nodes and relationships derived from CSV only
-2. **Entity extraction model** — focused subset of nodes to extract from PDFs via LLM; must partially overlap with the structured model via **bridge nodes** (merged on a shared key property such as `name`)
+2. **Entity extraction model** — focused subset of nodes to extract from documents via LLM; must partially overlap with the structured model via **bridge nodes** (merged on a shared key property such as `name`)
 3. **Lexical graph model** — `Document → Chunk`, created by `neo4j-lexical-graph`; no design needed, provided by the server
 4. **Unified model** — all three layers combined; show explicitly how extracted entities connect to structured nodes (bridge nodes + MERGE key)
 
@@ -93,23 +98,25 @@ pinned data-modeling server's ingest-query drafts directly.
 
 ### PDF data — `neo4j-lexical-graph`
 
+For Markdown/TXT/HTML/DOCX, use [DOCUMENT_MODE.md](./references/DOCUMENT_MODE.md)
+instead of a PDF mode reference, then continue with the shared extraction steps.
+
 Load the mode-specific reference file for the exact tool sequence:
 - **pymupdf** → [PYMUPDF_MODE.md](./references/PYMUPDF_MODE.md)
 - **docling** → [DOCLING_MODE.md](./references/DOCLING_MODE.md)
 - **page_image** → [PAGE_IMAGE_MODE.md](./references/PAGE_IMAGE_MODE.md)
-- **vlm_blocks** → [VLM_BLOCKS_MODE.md](./references/VLM_BLOCKS_MODE.md)
 
 Quick reference (all modes):
 
-| Step | Tool | pymupdf | docling | page_image | vlm_blocks |
-|------|------|---------|---------|------------|------------|
-| 1 | `create_lexical_graph` | ✓ | ✓ | ✓ | ✓ |
-| 2 | `chunk_lexical_graph` | ✗ skip | ✓ | ✓ | ✓ |
-| 3 | `list_documents` | ✓ | ✓ | ✓ | ✓ |
-| 4 | `verify_lexical_graph` | optional | optional | ✗ never | optional |
-| 5 | `assign_section_hierarchy` | ✗ skip | optional | ✗ skip | optional |
-| 6 | `generate_chunk_descriptions` | if images/tables | if images/tables | **required** | if images/tables |
-| 7 | `embed_chunks` | ✓ | ✓ | ✓ | ✓ |
+| Step | Tool | pymupdf | docling | page_image |
+|------|------|---------|---------|------------|
+| 1 | `create_lexical_graph` | ✓ | ✓ | ✓ |
+| 2 | `chunk_lexical_graph` | ✗ skip | ✓ | ✓ |
+| 3 | `list_documents` | ✓ | ✓ | ✓ |
+| 4 | `verify_lexical_graph` | optional | optional | ✗ never |
+| 5 | `assign_section_hierarchy` | ✗ skip | optional | ✗ skip |
+| 6 | `generate_chunk_descriptions` | if images/tables | if images/tables | **required** |
+| 7 | `embed_chunks` | ✓ | ✓ | ✓ |
 
 **`generate_chunk_descriptions` — call without `document_id`** to run for all active documents at once.
 
@@ -136,41 +143,59 @@ If orphans are found, check for cross-file ID mismatches before proceeding.
 
 ---
 
-## Step 5 [PDF only]: Export Schema and Review Validators
+## Step 5 [documents only]: Export Schema and Review Validators
 
-Use `convert_schema` from `neo4j-entity-graph` — **not** `export_to_pydantic_models` from the data-modeling server.
+Choose the existing schema path that matches the supplied source:
+
+- **Data model JSON:** use `convert_schema` from `neo4j-entity-graph` — **not**
+  `export_to_pydantic_models` from the data-modeling server. Follow the steps below.
+- **Ontology Graph Spec YAML/JSON:** call `setup_ontology_db`, then
+  `import_ontology_spec(content=...)` with the file contents. Use
+  `generate_schema_from_ontology` to review the generated Python schema, then
+  `extract_entities(ontology_name="your-ontology")`. See the existing
+  [ontology interchange instructions](../../../mcp-neo4j-entity-graph/README.md#ontology-graph-spec-importexport)
+  for supported semantics and `export_ontology_spec`. Import rejects unsupported
+  mappings before writes. `schema=` accepts Python, not ontology YAML/JSON;
+  arbitrary Pydantic-schema-to-ontology export is not established.
 
 - Input: the entity extraction sub-model (not the full unified model)
 - Set `output_path` to `outputs/schemas/<topic>_schema.py`
 - Output: `<topic>_schema.py` (Pydantic models used directly by extraction)
-- For CSV/PDF bridge keys, pass `key_normalization` to `convert_schema`, keyed by
+- Extraction properties support STRING, INTEGER, FLOAT and BOOLEAN. Keep temporal
+  values as explicitly modeled STRING representations with format validators;
+  unsupported annotations/types are rejected rather than silently converted.
+  Keys must resolve to required, non-null scalars with compatible endpoint types.
+  Structured CSV models may use their separately supported Neo4j property types.
+- For CSV/document bridge keys, pass `key_normalization` to `convert_schema`, keyed by
   entity label, e.g. `{"Product": "strip_lower", "Facility": "strip_lower"}`.
   Use `strip_lower` only when CSV keys use that same policy. The default `strip`
   preserves case. Generated relationship endpoints share the entity key policy.
 
-Review the Pydantic `.py` file. For each node's key property, verify or add a normalizing validator:
+Review the Pydantic `.py` file. Verify the generated node and relationship endpoint
+validators match the agreed CSV key policy. For a case-preserving key, for example:
 
 ```python
 @field_validator('name')
 @classmethod
 def normalize_name(cls, v: str) -> str:
-    return v.strip().lower()
+    return v.strip()
 ```
 
-This prevents duplicate nodes from minor text variations (e.g. `"Aspirin"` vs `"aspirin "`). Present the validators to the user and confirm before proceeding.
+Use `.strip().lower()` only for keys whose agreed identity is case-insensitive.
+Reuse an already confirmed policy; ask the user only if identity is ambiguous or
+the proposed policy changes. Do not lowercase case-sensitive identifiers.
 
 ---
 
-## Step 6 [PDF only]: Extract Entities
+## Step 6 [documents only]: Extract Entities
 
 Use `extract_entities` from `neo4j-entity-graph`:
 
-- Pass the Pydantic `.py` schema path from Step 5
+- Pass the Pydantic `.py` schema path from Step 5, or the imported `ontology_name`.
 - Keep `property_policy="preserve_existing"` (the default) when merging onto CSV
   nodes. Extraction fills missing properties and retains existing non-null values.
-  Use `overwrite` only when extraction is explicitly authoritative. Missing/null
-  fields withdraw prior owned assertions during replacement but do not delete
-  external/structured values. Inspect `EXTRACTED_FROM.conflictingProperties`
+  Use `overwrite` only when extraction is explicitly authoritative.
+  Inspect `EXTRACTED_FROM.conflictingProperties`
   and `proposedPropertiesJson`; report conflicts even when the job succeeds.
   The same policy now protects relationship properties. Inspect relationship
   proposals/conflicts on EntityExtractionClaim records linked to the source.
@@ -178,20 +203,16 @@ Use `extract_entities` from `neo4j-entity-graph`:
   Its default is the absolute schema path (or ontology name). Different scopes
   coexist; reuse the same scope when replacing prior output. `source_ids` can
   restrict a rebuild to explicit Chunk/Page IDs.
-- Replacement removes only tracked contributions from selected sources in that
-  scope, then publishes new output atomically. Any source/model/write failure
-  leaves prior domain output intact; counters describe extraction attempts even
-  when no output was published.
-- If legacy EXTRACTED_FROM links lack ownership metadata, use a fresh source
-  namespace with `source_ids` explicitly selecting its new chunks, or a separately
-  reviewed migration. Do not tag old data as owned,
-  clear the database, or infer ownership from labels/ID prefixes.
+- For rebuilds or legacy provenance, read
+  [Internals: extraction replacement](./references/EXTRACTION_INTERNALS.md).
+  Failures preserve prior domain output; legacy untracked output requires explicit
+  fresh-source selection or a reviewed migration.
 - Extraction is async — poll with `check_extraction_status` until complete
 - Report progress to the user: chunks processed, entities found so far
 
 ---
 
-## Step 7 [PDF only]: Verify Extraction Results
+## Step 7 [documents only]: Verify Extraction Results
 
 Use `read_neo4j_cypher` from `neo4j-graphrag`:
 
@@ -220,7 +241,7 @@ If significant duplicates: document them for next iteration. Do not re-run extra
 **Reminder — current MODE: CHATBOT or ANALYTICAL (set in Step 2).**
 
 **[CHATBOT mode]** → Load [CHATBOT_MODE.md](./references/CHATBOT_MODE.md):
-Answer each confirmed target question using `neo4j-graphrag` tools (vector search, fulltext search, Cypher, read_node_image), then generate the chatbot report saved to `outputs/reports/<topic>_chatbot_report.md`.
+Answer each confirmed target question using `neo4j-graphrag` tools (document-tree navigation, vector search, fulltext search, Cypher, read_node_image), then generate the chatbot report saved to `outputs/reports/<topic>_chatbot_report.md`.
 
 **[ANALYTICAL mode]** → Load [ANALYTICAL_MODE.md](./references/ANALYTICAL_MODE.md):
 Generate Cypher queries per use case in YAML format, validate them against the graph, then generate the analytical report saved to `outputs/reports/<topic>_report.md`.
@@ -236,7 +257,8 @@ uv run --project mcp-neo4j-proxy neo4j-validate-report REPORT_PATH \
 ```
 
 Use `chatbot_report` or `analytical_report` for `REPORT_TYPE`. Add
-`--pdf-data-present` when PDFs were ingested. Exit code `0` means the report is
+`--pdf-data-present` when any documents were ingested (PDF, Markdown, TXT, HTML or
+DOCX); this legacy flag enables the shared extraction-quality checks. Exit code `0` means the report is
 complete. On exit code `1`, correct every reported error and rerun the validator;
 do not claim completion until it passes. Exit code `2` means the report or contract
 could not be read and must be fixed before retrying.
@@ -250,5 +272,5 @@ could not be read and must be fixed before retrying.
 | `neo4j-data-modeling` | 3 | `list_example_data_models`, `get_example_data_model`, `get_mermaid_config_str`, `validate_data_model` |
 | `neo4j-ingest` | 4 | `compile_node_ingest_query`, `compile_relationship_ingest_query`, `ingest_csv_into_neo4j` |
 | `neo4j-lexical-graph` | 4 | `create_lexical_graph`, `chunk_lexical_graph`, `list_documents`, `generate_chunk_descriptions`, `embed_chunks`, `check_processing_status`, `verify_lexical_graph` (spot-check, single doc only), `assign_section_hierarchy` (optional) |
-| `neo4j-entity-graph` | 5–6 | `convert_schema`, `extract_entities`, `check_extraction_status` |
-| `neo4j-graphrag` | 4.5–8 | `read_neo4j_cypher`, `write_neo4j_cypher`, `get_neo4j_schema_and_indexes`, `vector_search`, `fulltext_search`, `search_cypher_query`, `read_node_image` |
+| `neo4j-entity-graph` | 5–6 | `convert_schema`, `setup_ontology_db`, `import_ontology_spec`, `generate_schema_from_ontology`, `export_ontology_spec`, `extract_entities`, `check_extraction_status` |
+| `neo4j-graphrag` | 4.5–8 | `read_neo4j_cypher`, `write_neo4j_cypher`, `get_neo4j_schema_and_indexes`, `vector_search`, `fulltext_search`, `search_cypher_query`, `read_node_image`, `get_ontology`, `list_retrieval_documents`, `get_document_outline`, `get_section_content`, `get_document_content` |

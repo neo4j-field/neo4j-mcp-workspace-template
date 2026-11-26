@@ -110,7 +110,7 @@ def compile_node_ingest_query(node: Mapping[str, Any] | str) -> str:
 
     node = _mapping(node, "node")
     label = _identifier(node.get("label"), "node.label")
-    if label in {"EntityExtractionRun", "EntityExtractionClaim"}:
+    if label in {"EntityExtractionRun", "EntityExtractionClaim", "EmbeddingPublicationLock"}:
         raise IngestModelError("node.label is reserved for extraction metadata")
     key = _property(node.get("key_property"), "node.key_property")
     properties = _properties(node.get("properties", []), "node.properties")
@@ -147,7 +147,7 @@ def compile_relationship_ingest_query(
         relationship.get("end_node_label"), "relationship.end_node_label"
     )
 
-    if {start_label, end_label} & {"EntityExtractionRun", "EntityExtractionClaim"} or relationship_type in {"EXTRACTED_FROM", "PROCESSED_SOURCE", "CLAIM_SOURCE"}:
+    if {start_label, end_label} & {"EntityExtractionRun", "EntityExtractionClaim", "EmbeddingPublicationLock"} or relationship_type in {"EXTRACTED_FROM", "PROCESSED_SOURCE", "CLAIM_SOURCE"}:
         raise IngestModelError("relationship uses reserved extraction metadata")
 
     raw_nodes = data_model.get("nodes")

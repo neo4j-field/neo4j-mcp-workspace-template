@@ -47,6 +47,8 @@ class NormalizerConfig:
 
 # Maps normalizer tag → callable name in normalizer_runtime
 _GENERIC_RUNTIME: dict[str, str] = {
+    "strip": "_strip",
+    "strip_lower": "_strip_lower",
     "whitespace": "_ws",
     "strip_the": "_strip_the",
     "strip_acronym_suffix": "_strip_acronym_suffix",

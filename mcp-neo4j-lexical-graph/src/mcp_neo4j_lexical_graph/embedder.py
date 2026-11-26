@@ -25,8 +25,10 @@ class ChunkEmbedder:
         model: str = DEFAULT_EMBEDDING_MODEL,
         batch_size: int = 100,
         max_retries: int = 3,
+        dimensions: Optional[int] = None,
     ):
         self.model = model
+        self.dimensions = dimensions
         self.batch_size = batch_size
         self.max_retries = max_retries
         logger.info("ChunkEmbedder initialized", model=model, batch_size=batch_size)
@@ -34,8 +36,11 @@ class ChunkEmbedder:
     async def embed_texts_batch(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        response = await litellm.aembedding(model=self.model, input=texts)
+        kwargs = {"dimensions": self.dimensions} if self.dimensions is not None else {}
+        response = await litellm.aembedding(model=self.model, input=texts, **kwargs)
         sorted_data = sorted(response.data, key=lambda x: x["index"])
+        if [item["index"] for item in sorted_data] != list(range(len(texts))):
+            raise ValueError("Embedding response indexes do not match the requested inputs")
         return [item["embedding"] for item in sorted_data]
 
     async def embed_many(

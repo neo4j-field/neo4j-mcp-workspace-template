@@ -48,7 +48,8 @@ neo4j-mcp-workspace-template/
 │           └── references/
 ├── data/                           # Input data (gitignored contents, tracked structure)
 │   ├── csv/                        # Structured data
-│   └── pdf/                        # PDF documents
+│   ├── pdf/                        # PDF documents
+│   └── documents/                  # Markdown, TXT, local HTML/XHTML, DOCX
 ├── outputs/                        # Generated outputs (gitignored contents, tracked structure)
 │   ├── data_models/                # Graph data model JSON files
 │   ├── queries/                    # Cypher query YAML files
@@ -77,7 +78,7 @@ Five MCP servers are configured for this workspace:
 - **Required env:** reads from `.env` via python-dotenv
 
 ### `neo4j-lexical-graph`
-- **Purpose:** Parse PDFs into a searchable graph with chunk nodes and embeddings
+- **Purpose:** Parse PDFs, Markdown, TXT, local HTML/XHTML and DOCX into a searchable graph with chunk nodes and embeddings
 - **Required env:** reads from `.env` via python-dotenv
 
 ### `neo4j-entity-graph`
@@ -110,9 +111,9 @@ The full workflow is in `.agents/skills/develop-neo4j-graph/SKILL.md`.
 1. Analyze source data samples
 2. Discuss use case → infer CHATBOT or ANALYTICAL mode
 3. Design graph data model (`neo4j-data-modeling`)
-4. Ingest data — CSV (`neo4j-ingest`) and/or PDF (`neo4j-lexical-graph` + `neo4j-entity-graph`)
+4. Ingest data — CSV (`neo4j-ingest`) and/or documents (`neo4j-lexical-graph` + `neo4j-entity-graph`)
 5. Verify ingestion counts (`neo4j-graphrag`)
-6–7. [PDF only] Schema export, entity extraction, verify — file-based (`convert_schema`) or ontology DB (`generate_schema_from_ontology`)
+6–7. [Documents only] Schema export, entity extraction, verify — file-based (`convert_schema`) or ontology DB (`generate_schema_from_ontology`)
 8. Output — Q&A report (CHATBOT) or Cypher analysis (ANALYTICAL)
 
 ---

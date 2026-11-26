@@ -7,7 +7,6 @@ Uses the Docling DocumentConverter for:
 - Image extraction for figures and tables
 - Bounding boxes
 - Caption linking (CAPTION_OF)
-- TOCEntry extraction from DOCUMENT_INDEX items
 - Furniture filtering (headers, footers, page numbers)
 
 Requires the `docling` extra: pip install 'mcp-neo4j-lexical-graph-v2[docling]'
@@ -30,6 +29,7 @@ from ..models import (
     ParsedSection,
 )
 from .base import BaseParser
+from .conversion_validation import require_complete_conversion
 
 logger = structlog.get_logger()
 
@@ -72,14 +72,13 @@ class DoclingParser(BaseParser):
         skip_furniture: bool = True,
         exclude_element_types: list[str] | None = None,
         extract_sections: bool = True,
-        extract_toc: bool = True,
         store_page_images: bool = False,
         dpi: int = 150,
         **kwargs: Any,
     ) -> ParsedDocument:
         try:
             from docling.document_converter import DocumentConverter, PdfFormatOption
-            from docling.datamodel.pipeline_options import PdfPipelineOptions
+            from docling.datamodel.pipeline_options import HeadingHierarchyOptions, PdfPipelineOptions
             from docling.datamodel.base_models import InputFormat
         except ImportError:
             raise ImportError(
@@ -96,6 +95,9 @@ class DoclingParser(BaseParser):
 
         # Configure pipeline with image generation for figures and tables
         pipeline_options = PdfPipelineOptions()
+        pipeline_options.heading_hierarchy_options = HeadingHierarchyOptions(enabled=True)
+        # Docling retains heading font/style lines for this stage; no extra LLM
+        # or full parsed-page retention is needed.
         pipeline_options.images_scale = dpi / 72.0
         pipeline_options.generate_picture_images = True
         try:
@@ -109,6 +111,7 @@ class DoclingParser(BaseParser):
             }
         )
         conv_result = converter.convert(str(path))
+        require_complete_conversion(conv_result, path.name)
         docling_doc = conv_result.document
 
         exclude_set = set(exclude_element_types or [])
@@ -258,9 +261,9 @@ class DoclingParser(BaseParser):
                 "skip_furniture": skip_furniture,
                 "exclude_element_types": list(exclude_set),
                 "extract_sections": extract_sections,
-                "extract_toc": extract_toc,
                 "store_page_images": store_page_images,
                 "dpi": dpi,
+                "native_heading_hierarchy": True,
             },
             metadata=metadata or {},
             pages=pages,
@@ -390,7 +393,7 @@ def _get_heading_level(item: Any, label_str: str, tree_level: int = 0) -> int:
     Uses:
     1. label_str == "title" -> level 1
     2. item.level (docling SectionHeaderItem) if valid
-    3. tree_level from iterate_items() as fallback
+    3. flat level 1 when semantic heading depth is unavailable
     """
     if label_str.lower() == "title":
         return 1
@@ -398,9 +401,8 @@ def _get_heading_level(item: Any, label_str: str, tree_level: int = 0) -> int:
     item_level = getattr(item, "level", None)
     if isinstance(item_level, int) and item_level > 0:
         return max(1, min(6, item_level))
-    # Fall back to tree level from iterate_items()
-    # tree_level 0 = top level (title/h1), 1 = h2, etc.
-    return max(1, min(6, tree_level + 1))
+    # Reading-order containment depth is not semantic heading depth.
+    return 1
 
 
 def _get_item_image(

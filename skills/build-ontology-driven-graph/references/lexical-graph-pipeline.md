@@ -11,7 +11,7 @@ You only need this file if pymupdf produced bad chunks in Phase 3.1. For the com
 | `pymupdf` (default) | Born-digital PDFs with selectable text — modern contracts, briefs, reports | `embed_chunks` → done. Optional: `generate_chunk_descriptions` if you want vector search to also surface images / tables (extra time, only useful when visual content matters). |
 | `page_image` | Scanned PDFs / image-only docs / pymupdf produced empty or scrambled chunks | **`generate_chunk_descriptions` → `embed_chunks`** — page_image chunks have minimal text on their own; descriptions are what gets embedded. Skipping descriptions = vector search returns nothing useful. |
 
-`docling` and `vlm_blocks` exist as alternative parsers (rich tables / mixed layouts) but are out of scope for this skill — fall back from pymupdf goes directly to page_image.
+`docling` exist as alternative parsers (rich tables / mixed layouts) but are out of scope for this skill — fall back from pymupdf goes directly to page_image.
 
 ## How to detect a bad pymupdf parse
 

@@ -48,6 +48,8 @@ from .models import (
     PassType,
 )
 from .ontology_loader import load_ontology
+from .ontology_spec import parse_document, import_document, export_document, serialize_document
+from .schema_ontology_export import export_schema_document
 from .schema_generator import generate_extraction_models_code
 from .text_extractor import TextExtractor
 from .vlm_extractor import VlmExtractor
@@ -560,6 +562,7 @@ def create_mcp_server(
                             "name": key_prop_data.get("name"),
                             "type": key_prop_data.get("type", "STRING"),
                             "description": key_prop_data.get("description"),
+                            "required": True,
                         }
                     ]
                     + [
@@ -567,6 +570,7 @@ def create_mcp_server(
                             "name": prop.get("name"),
                             "type": prop.get("type", "STRING"),
                             "description": prop.get("description"),
+                            "required": prop.get("required", False),
                         }
                         for prop in node.get("properties", [])
                     ],
@@ -588,6 +592,7 @@ def create_mcp_server(
                             "name": prop.get("name"),
                             "type": prop.get("type", "STRING"),
                             "description": prop.get("description"),
+                            "required": prop.get("required", False),
                         }
                         for prop in rel.get("properties", [])
                     ],
@@ -664,7 +669,7 @@ def create_mcp_server(
         try:
             async with ontology_driver.session(database=ontology_database) as session:
                 for stmt in statements:
-                    await session.run(stmt)
+                    await (await session.run(stmt)).consume()
             logger.info("Ontology DB setup complete", database=ontology_database)
             return json.dumps(
                 {
@@ -682,6 +687,101 @@ def create_mcp_server(
         except Exception as e:
             logger.error("Failed to setup ontology DB", error=str(e))
             raise ToolError(f"Failed to setup ontology DB: {e}")
+
+    @mcp.tool(
+        name="import_ontology_spec",
+        annotations=ToolAnnotations(
+            title="Import Ontology Graph Spec",
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+    )
+    async def import_ontology_spec(
+        content: str = Field(
+            ...,
+            description="YAML or JSON ontology using the pinned Neo4j Ontology Graph Spec 1.1.0 schema URI.",
+        ),
+    ) -> str:
+        """Create a new extraction ontology from a supported Ontology Graph Spec file's content.
+
+        Validates offline before writing; never replaces existing ontologies or types.
+        Supports one label/key per node, scalar STRING/INTEGER/FLOAT/BOOLEAN properties,
+        fixed relationship endpoints, and the template's namespaced custom normalizers.
+        Unsupported semantics and existing names fail with an actionable error.
+        Run setup_ontology_db first. Pass ontology id to generate_schema_from_ontology.
+        """
+        try:
+            return json.dumps(
+                await import_document(
+                    ontology_driver, ontology_database, parse_document(content)
+                ),
+                indent=2,
+            )
+        except Exception as exc:
+            raise ToolError(f"Ontology spec import failed: {exc}") from exc
+
+    @mcp.tool(
+        name="export_ontology_spec",
+        annotations=ToolAnnotations(
+            title="Export Ontology Graph Spec",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    async def export_ontology_spec(
+        ontology_name: str = Field(
+            ..., description="Name of the existing Ontology DB ontology."
+        ),
+        format: Literal["yaml", "json"] = "yaml",
+    ) -> str:
+        """Return current ontology as validated YAML/JSON using Ontology Graph Spec 1.1.0.
+
+        Export canonicalizes node/property identifiers to their database names.
+        Normalizers, alias maps and blocklists use the namespaced template custom
+        extension. This is interchange for extraction, not a graph-DDL deployment tool.
+        """
+        try:
+            return serialize_document(
+                await export_document(
+                    ontology_driver, ontology_database, ontology_name
+                ),
+                format,
+            )
+        except Exception as exc:
+            raise ToolError(f"Ontology spec export failed: {exc}") from exc
+
+    @mcp.tool(
+        name="export_extraction_schema_ontology",
+        annotations=ToolAnnotations(
+            title="Export Python extraction schema as Ontology Graph Spec",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    async def export_extraction_schema_ontology(
+        schema_path: str = Field(..., description="Absolute path to a trusted Python extraction schema containing ExtractionOutput."),
+        format: Literal["yaml", "json"] = "yaml",
+    ) -> str:
+        """Export a supported Python extraction contract as validated ontology YAML/JSON.
+
+        No database or LLM is used. Supports scalar properties, keys/endpoints,
+        descriptions, requiredness, optional None defaults and generated strip or
+        strip/lower validators. Unsupported custom Pydantic logic fails explicitly;
+        this is not a lossless converter for arbitrary Python schemas. Like
+        extraction itself, loading the supplied Python file executes trusted code.
+        Returned content can be saved and used directly with file-backed get_ontology
+        or import_ontology_spec; it does not store ontology metadata in the data graph.
+        """
+        try:
+            return serialize_document(export_schema_document(schema_path), format)
+        except Exception as exc:
+            raise ToolError(f"Python schema ontology export failed: {exc}") from exc
 
     # ========================================
     # TOOL: Generate Schema from Ontology

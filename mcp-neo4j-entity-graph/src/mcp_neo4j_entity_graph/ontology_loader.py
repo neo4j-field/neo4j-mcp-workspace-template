@@ -68,6 +68,13 @@ async def load_ontology(
         key_property: str | None = None
         compose_template: dict[str, Any] | None = None
 
+        for prop in nt["properties"]:
+            for flag in ("is_key", "required"):
+                if prop.get(flag) is not None and type(prop[flag]) is not bool:
+                    raise ValueError(f"{nt['name']}.{prop['name']}: {flag} must be a boolean")
+        key_names = [p["name"] for p in nt["properties"] if p.get("is_key")]
+        if len(key_names) != 1:
+            raise ValueError(f"NodeType {nt['name']!r} must have exactly one key property; found {len(key_names)}")
         for p in nt["properties"]:
             properties.append(
                 PropertySchema(
@@ -124,6 +131,8 @@ async def load_ontology(
     for rt in relationship_types:
         rel_props = []
         for p in rt["properties"]:
+            if p.get("required") is not None and type(p["required"]) is not bool:
+                raise ValueError(f"{rt['name']}.{p['name']}: required must be a boolean")
             rel_props.append(
                 PropertySchema(
                     name=p["name"],
@@ -154,6 +163,8 @@ async def load_ontology(
         entity_types=entity_schemas,
         relationship_types=rel_schemas,
     )
+    from .schema_validation import validate_extraction_schema
+    validate_extraction_schema(schema)
     return schema, normalizers
 
 

@@ -60,7 +60,7 @@ async def track_properties(tx, kind, object_id, before, after, written):
 
 async def write_entity(tx, source_label, label, key, entity, meta, policy, scope):
     validate_properties(entity['properties'])
-    if label in {'EntityExtractionRun', 'EntityExtractionClaim', 'Document', 'Chunk', 'Page'}:
+    if label in {'EntityExtractionRun', 'EntityExtractionClaim', 'EmbeddingPublicationLock', 'Document', 'Chunk', 'Page'}:
         raise ValueError(f'Reserved entity label: {label}')
     result = await tx.run(f'''
         MATCH (c:{identifier(source_label)} {{id: $source}})

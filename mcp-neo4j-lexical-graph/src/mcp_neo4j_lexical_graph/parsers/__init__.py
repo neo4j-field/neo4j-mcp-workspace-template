@@ -1,4 +1,4 @@
-"""Document parsers -- convert PDFs to ParsedDocument."""
+"""Document parsers -- convert local source files to ParsedDocument."""
 
 from .base import BaseParser
 from .page_image import PageImageParser

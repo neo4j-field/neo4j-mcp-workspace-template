@@ -13,7 +13,7 @@ import structlog
 from neo4j import AsyncDriver
 
 from ..graph_reader import get_elements_for_document
-from .base import BaseChunker, ChunkData, strip_base64_from_text
+from .base import BaseChunker, ChunkData, strip_base64_from_text, attach_source_locators
 
 logger = structlog.get_logger()
 
@@ -94,24 +94,55 @@ class TokenWindowChunker(BaseChunker):
         full_text = "\n\n".join(e.get("text", "") for e in text_elements)
         tokens = self.encoding.encode(full_text)
         total_tokens = len(tokens)
+        # Map token windows back to original elements using UTF-8 byte spans.
+        # Encoding each element separately would shift token boundaries at joins.
+        spans = []
+        byte_offset = 0
+        for index, element in enumerate(text_elements):
+            if index:
+                byte_offset += len("\n\n".encode("utf-8"))
+            end = byte_offset + len(element["text"].encode("utf-8"))
+            spans.append((byte_offset, end, element["id"]))
+            byte_offset = end
+        text_bytes = full_text.encode("utf-8")
+
+        def character_boundary(offset: int) -> int:
+            # Individual BPE tokens can end inside a Unicode codepoint. Adjacent
+            # zero-overlap windows must use the same character boundary so text
+            # is neither replaced by U+FFFD nor lost during reconstruction.
+            while offset < len(text_bytes) and text_bytes[offset] & 0xC0 == 0x80:
+                offset += 1
+            return offset
+
+        token_offsets = [0]
+        for token in tokens:
+            token_offsets.append(
+                token_offsets[-1] + len(self.encoding.decode_single_token_bytes(token))
+            )
 
         text_chunks: list[ChunkData] = []
         token_start = 0
         while token_start < total_tokens:
             token_end = min(token_start + self.chunk_size, total_tokens)
-            chunk_tokens = tokens[token_start:token_end]
-            chunk_text = self.encoding.decode(chunk_tokens)
+            byte_start = character_boundary(token_offsets[token_start])
+            byte_end = character_boundary(token_offsets[token_end])
+            chunk_text = text_bytes[byte_start:byte_end].decode("utf-8")
 
-            text_chunks.append(
-                ChunkData(
-                    id="",
-                    text=chunk_text,
-                    index=-1,
-                    token_count=len(chunk_tokens),
-                    type="text",
-                    element_ids=[],  # token window doesn't track per-element
+            if chunk_text:
+                text_chunks.append(
+                    ChunkData(
+                        id="",
+                        text=chunk_text,
+                        index=-1,
+                        token_count=len(self.encoding.encode(chunk_text)),
+                        type="text",
+                        element_ids=[
+                            eid
+                            for start, end, eid in spans
+                            if start < byte_end and end > byte_start
+                        ],
+                    )
                 )
-            )
 
             step = self.chunk_size - self.chunk_overlap
             next_start = token_start + step
@@ -121,6 +152,7 @@ class TokenWindowChunker(BaseChunker):
 
         # Merge and assign indices
         all_chunks = text_chunks + special_chunks
+        attach_source_locators(all_chunks, elements)
         for idx, c in enumerate(all_chunks):
             c.index = idx
             c.id = f"{document_id}_chunk_{idx:04d}"

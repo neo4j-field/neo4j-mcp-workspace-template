@@ -9,10 +9,12 @@ Contains:
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import importlib.util
 import inspect
 import sys
+from enum import Enum
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Optional, Type, Union, get_args, get_origin
@@ -32,6 +34,8 @@ from .models import (
     PropertySchema,
     RelationshipTypeSchema,
 )
+
+from .schema_validation import schema_from_models, endpoint_fields, validate_scalar
 
 logger = structlog.get_logger()
 
@@ -153,6 +157,26 @@ def build_user_prompt_vlm(chunk: ClassifiedChunk) -> list[dict[str, Any]]:
     return content
 
 
+def _validate_source_declarations(code, filename):
+    """Catch declarations Python would overwrite before contract inspection."""
+    tree = ast.parse(code, filename=filename)
+    names = set()
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        if node.name in names:
+            raise ValueError(f"Duplicate top-level schema class declaration: {node.name}")
+        names.add(node.name)
+        fields = set()
+        for declaration in node.body:
+            if not isinstance(declaration, ast.AnnAssign) or not isinstance(declaration.target, ast.Name):
+                continue
+            name = declaration.target.id
+            if name in fields:
+                raise ValueError(f"Duplicate annotated schema field: {node.name}.{name}")
+            fields.add(name)
+
+
 def load_extraction_output_model(
     pydantic_model_path: str, *, source_bytes: bytes | None = None,
 ) -> Type[BaseModel]:
@@ -180,6 +204,7 @@ def load_extraction_output_model(
     # Read source directly: timestamp/size-based bytecode caches can otherwise
     # load stale validators after a rapid schema edit of the same file length.
     code = source_bytes if source_bytes is not None else path.read_bytes()
+    _validate_source_declarations(code, str(path))
     exec(compile(code, str(path), "exec"), module.__dict__)
 
     if not hasattr(module, "ExtractionOutput"):
@@ -191,74 +216,8 @@ def load_extraction_output_model(
 
 
 def schema_from_pydantic_module(module: ModuleType) -> ExtractionSchema:
-    """Reconstruct an ExtractionSchema by introspecting a generated .py module.
-
-    Reads ClassVars (_node_label, _key_property, _relationship_type, etc.) and
-    model_fields from entity/relationship model classes. Used for pydantic-only mode
-    so no JSON schema file is required.
-    """
-
-    def _unwrap_optional(annotation: Any) -> Any:
-        """Unwrap Optional[X] -> X, leave other types as-is."""
-        if get_origin(annotation) is Union:
-            args = [a for a in get_args(annotation) if a is not type(None)]
-            return args[0] if args else str
-        return annotation
-
-    def _python_to_neo4j_type(annotation: Any) -> str:
-        annotation = _unwrap_optional(annotation)
-        return {int: "INTEGER", float: "FLOAT", bool: "BOOLEAN"}.get(annotation, "STRING")
-
-    entity_types: list[EntityTypeSchema] = []
-    relationship_types: list[RelationshipTypeSchema] = []
-
-    for _, cls in inspect.getmembers(module, inspect.isclass):
-        if not (isinstance(cls, type) and issubclass(cls, BaseModel) and cls is not BaseModel):
-            continue
-
-        if hasattr(cls, "_node_label"):
-            key_prop = cls._key_property  # type: ignore[attr-defined]
-            properties = [
-                PropertySchema(
-                    name=fname,
-                    type=_python_to_neo4j_type(finfo.annotation),
-                    description=finfo.description,
-                    required=finfo.is_required(),
-                )
-                for fname, finfo in cls.model_fields.items()
-            ]
-            entity_types.append(EntityTypeSchema(
-                label=cls._node_label,  # type: ignore[attr-defined]
-                description=(cls.__doc__ or f"A {cls._node_label} entity").strip(),
-                key_property=key_prop,
-                properties=properties,
-            ))
-
-        elif hasattr(cls, "_relationship_type"):
-            # Relationship properties are the optional fields; required fields are endpoint keys
-            rel_properties = [
-                PropertySchema(
-                    name=fname,
-                    type=_python_to_neo4j_type(finfo.annotation),
-                    description=finfo.description,
-                )
-                for fname, finfo in cls.model_fields.items()
-                if not finfo.is_required()
-            ]
-            source_entity = cls._start_node_label  # type: ignore[attr-defined]
-            target_entity = cls._end_node_label  # type: ignore[attr-defined]
-            relationship_types.append(RelationshipTypeSchema(
-                type=cls._relationship_type,  # type: ignore[attr-defined]
-                description=(cls.__doc__ or f"{source_entity} to {target_entity}").strip(),
-                source_entity=source_entity,
-                target_entity=target_entity,
-                properties=rel_properties,
-            ))
-
-    if not entity_types:
-        raise ValueError("No entity model classes found in module (expected classes with _node_label ClassVar)")
-
-    return ExtractionSchema(entity_types=entity_types, relationship_types=relationship_types)
+    """Validate the complete Pydantic output contract before graph/model work."""
+    return schema_from_models(module)
 
 
 def parse_extraction_response(
@@ -292,6 +251,24 @@ def parse_extraction_response(
             outcome=ChunkExtractionOutcome.FAILED,
             error=f"Failed to parse structured response: {e}",
         )
+
+
+def _storage_dump(model):
+    # JSON mode may serialize an invalid validator return (e.g. date -> string)
+    # before scalar guards see it. Preserve native values; Enum is deliberate.
+    return {name: value.value if isinstance(value, Enum) else value
+            for name, value in model.model_dump(mode="python").items()}
+
+
+def _validate_properties(values, properties, context):
+    declared = {p.name:p for p in properties}
+    for name, value in values.items():
+        if name not in declared:
+            raise ValueError(f"{context}: undeclared property {name}")
+        validate_scalar(value, declared[name].type, f"{context}.{name}")
+    for prop in properties:
+        if prop.required and prop.name not in values:
+            raise ValueError(f"{context}: required property {prop.name} is missing")
 
 
 _SKIP_SENTINEL = "__SKIP__"
@@ -332,19 +309,21 @@ def _parse_typed_response(
                     key_property = getattr(item_class, "_key_property", None)
                     props = {
                         k: v
-                        for k, v in item.model_dump().items()
+                        for k, v in _storage_dump(item).items()
                         if v is not None and not k.startswith("_")
                     }
                     # Drop entities whose key property is missing or marked SKIP.
                     key_value = props.get(key_property) if key_property else None
-                    if (
-                        key_property is not None
-                        and (key_value is None or key_value == _SKIP_SENTINEL)
-                    ) or any(v == _SKIP_SENTINEL for v in props.values()):
+                    if any(v == _SKIP_SENTINEL for v in props.values()):
                         skip_count += 1
                         continue
-                    if props:
-                        entities.append(ExtractedEntity(label=label, properties=props))
+                    if key_value is None or key_value == "":
+                        raise ValueError(f"{label}: extracted entity key {key_property!r} is missing/empty")
+                    entity_schema = schema.get_entity_schema(label)
+                    if entity_schema is None:
+                        raise ValueError(f"Unknown entity label {label}")
+                    _validate_properties(props, entity_schema.properties, f"entity {label}")
+                    entities.append(ExtractedEntity(label=label, properties=props))
 
                 # Relationship model: has _relationship_type
                 elif hasattr(item_class, "_relationship_type"):
@@ -354,34 +333,31 @@ def _parse_typed_response(
                     start_key_prop = item_class._start_key_property  # type: ignore[attr-defined]
                     end_key_prop = item_class._end_key_property  # type: ignore[attr-defined]
 
-                    # Extract source/target keys and rel properties from fields
-                    dumped = item.model_dump()
-                    source_key = None
-                    target_key = None
-                    rel_props: dict[str, Any] = {}
-
-                    for k, v in dumped.items():
-                        if k.startswith("_") or v is None:
-                            continue
-                        # Heuristic: first field is source key, second is target key
-                        # rest are relationship properties
-                        if source_key is None:
-                            source_key = str(v)
-                        elif target_key is None:
-                            target_key = str(v)
-                        else:
-                            rel_props[k] = v
-
-                    # Drop relationships where either endpoint key is missing or SKIP.
-                    if (
-                        not source_key
-                        or not target_key
-                        or source_key == _SKIP_SENTINEL
-                        or target_key == _SKIP_SENTINEL
-                    ):
-                        if source_key == _SKIP_SENTINEL or target_key == _SKIP_SENTINEL:
-                            skip_count += 1
+                    # Bind endpoints explicitly, with a validated first-two-field
+                    # compatibility path for older generated schemas.
+                    start_field, end_field = endpoint_fields(item_class)
+                    dumped = _storage_dump(item)
+                    source_key = dumped.pop(start_field, None)
+                    target_key = dumped.pop(end_field, None)
+                    if source_key == _SKIP_SENTINEL or target_key == _SKIP_SENTINEL:
+                        skip_count += 1
                         continue
+                    if source_key is None or source_key == "" or target_key is None or target_key == "":
+                        raise ValueError(f"{rel_type}: extracted relationship endpoint key is missing/empty")
+                    for key_value, entity_label in [(source_key, start_label), (target_key, end_label)]:
+                        entity_schema = schema.get_entity_schema(entity_label)
+                        if entity_schema is None:
+                            raise ValueError(f"{rel_type}: undeclared endpoint label {entity_label}")
+                        storage = next((p.type for p in entity_schema.properties if p.name == entity_schema.key_property), "STRING")
+                        validate_scalar(key_value, storage, f"{rel_type} endpoint {entity_label}")
+                    rel_props = {k:v for k,v in dumped.items() if v is not None}
+                    if any(v == _SKIP_SENTINEL for v in rel_props.values()):
+                        skip_count += 1
+                        continue
+                    rel_schema = schema.get_relationship_schema(rel_type)
+                    if rel_schema is None:
+                        raise ValueError(f"Unknown relationship type {rel_type}")
+                    _validate_properties(rel_props, rel_schema.properties, f"relationship {rel_type}")
 
                     relationships.append(
                         ExtractedRelationship(

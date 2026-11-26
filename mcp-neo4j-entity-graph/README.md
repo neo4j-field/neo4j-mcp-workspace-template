@@ -41,6 +41,45 @@ The `.py` file can be customized before running extraction:
 - Add `Literal` types to constrain categorical fields (phase, status, therapeutic area...)
 - Add `@field_validator` for normalization (strip legal suffixes, resolve aliases...)
 
+### Ontology Graph Spec import/export
+
+Run `setup_ontology_db` once, then use `import_ontology_spec(content=...)` for YAML or JSON with
+`schema: https://neo4j.com/docs/ontology-graph-spec/1.1.0/schema.json`.
+Validation uses the bundled, pinned normative schema offline. Import creates a new
+ontology atomically; existing ontology, type, alias-map or blocklist names cause an
+actionable error. Then use the existing `generate_schema_from_ontology` or
+`extract_entities(ontology_name=...)` workflow. Export with
+`export_ontology_spec(ontology_name="my-poc", format="yaml")` (`json` also works).
+
+To export a Python extraction schema created by `convert_schema`, call
+`export_extraction_schema_ontology(schema_path="/absolute/path/schema.py", format="yaml")`.
+Save the returned content as an ontology file for file-backed GraphRAG `get_ontology`,
+or pass it to `import_ontology_spec`. This export uses no database or LLM and creates
+no graph metadata. Loading the Python input executes trusted code, as extraction does.
+
+Python export supports the generated scalar contract, descriptions, required fields,
+optional `None` defaults, scalar keys, endpoint bindings and `strip()` / `strip().lower()`
+validators. Exact identity is retained through extension normalizers `strip` and
+`strip_lower`; existing `whitespace` and `lowercase` normalizers also collapse internal
+spaces and retain their existing behavior. Arbitrary Python schemas are not losslessly
+convertible: custom validators, serializers, model configuration, constrained/Literal/Enum
+fields, aliases and meaningful defaults are rejected with a field-specific error.
+For a schema generated from an ontology with richer normalizers, export the source
+ontology with `export_ontology_spec` instead. The interchange covers JSON extraction
+and graph semantics, not Python-only input types or output-wrapper naming.
+
+The extraction subset supports STRING/INTEGER/FLOAT/BOOLEAN properties, one key per
+node and one source/target node type per relationship. Template normalizers, alias
+maps, blocklists and composed names round-trip through the namespaced
+`extensions.custom.neo4j-mcp-workspace-template` extension. Unsupported semantics
+are rejected before import writes, including compound keys, extra labels, temporal/
+list/vector types, cardinalities and arbitrary constraint/index deployment. The
+adapter preserves extraction semantics for this subset; it does not deploy a spec
+as database DDL. Spec semantic aliases differ from value-normalization alias maps.
+Ontology IDs must be filename-safe for the existing generated-schema cache.
+Export canonicalizes spec identifiers to database names. YAML anchors/aliases and
+unrecognized custom metadata are rejected rather than silently discarded.
+
 ### `extract_entities`
 
 Extracts entities and relationships from graph nodes using LLM. Returns immediately with a job ID.
@@ -112,7 +151,8 @@ check_extraction_status(job_id="abc123")
 # 5. Re-run extraction (incremental — only unprocessed nodes)
 extract_entities(schema="data_models/my_schema.py")
 
-# 6. Force full re-extraction (e.g. after schema changes)
+# 6. Force re-extraction even when source and configuration are unchanged
+# Schema changes are detected automatically; force is not required for them.
 extract_entities(schema="data_models/my_schema.py", force=True)
 ```
 
@@ -358,3 +398,44 @@ Publication currently uses one transaction and retains model results in memory.
 Use bounded source scopes; large-run throughput, bounded memory, source deletion,
 claim/history retention and cross-server recovery remain separate hardening work.
 The internal records are current contribution state, not a historical fact ledger.
+
+### Extraction schema preflight
+
+File schemas, modeling-to-schema conversion and ontology-generated schemas now use
+one fail-fast contract. Invalid schemas are rejected before document-source reads,
+completion invalidation, graph publication or model calls (ontology metadata must
+first be read to compile an ontology schema).
+
+Supported stored property/key types are STRING, INTEGER, FLOAT and BOOLEAN. Manual
+Pydantic models can use corresponding scalar annotations, optional non-key fields,
+homogeneous Literal/Enum constraints, and matching field constraints on endpoints.
+Lists, mappings, arbitrary nested models and heterogeneous unions are rejected
+instead of silently described as STRING. Additional property `required` flags are
+honored by generated models. Identifier collisions, private/reserved fields,
+duplicate entity/relationship/property names, missing entity references, ambiguous
+keys and inconsistent endpoint metadata fail with an actionable schema error.
+
+Every model must appear exactly once in `ExtractionOutput` as a list field.
+Entity keys are required/non-nullable; the supported ontology `_compose_<key>`
+model-validator convention can synthesize an optional key, but a key still missing
+at runtime fails the source rather than silently dropping its entity. An ontology
+must declare exactly one `is_key=true` property per node type; `is_key` and
+`required` flags must be booleans.
+
+New generated relationship classes carry explicit `_start_field`/`_end_field`
+bindings. Older classes remain supported when their first two fields are required,
+non-null endpoint keys with matching key metadata, scalar type and constraints.
+Required relationship properties are kept separate from endpoints. Integer/float
+and boolean endpoint values keep their native types (including `0` and `False`)
+so Cypher MATCH uses the same type as the corresponding entity key. String keys
+retain case; configured validators remain responsible for normalization.
+
+This is static model/key-definition validation, not inspection or creation of
+existing Neo4j DDL constraints. It does not prove arbitrary Python validator
+semantics or concurrent uniqueness. Schemas remain trusted executable Python;
+runtime guards catch missing keys and invalid native scalar validator returns,
+without JSON-stringifying temporal values or erasing NaN. Enum values are deliberately
+unwrapped. A bounded AST check rejects obvious duplicate top-level classes/annotated
+fields before execution, preserving inherited fields and annotation-plus-default
+patterns. Normalizer-requested SKIP filtering remains supported. Generated descriptions and
+enum literals are quoted as data rather than interpolated as executable code.

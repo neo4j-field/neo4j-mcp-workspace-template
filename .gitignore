@@ -226,8 +226,10 @@ mcp-neo4j-graphrag/
 # Data inputs (user data, not committed)
 data/pdf/*
 data/csv/*
+data/documents/*
 !data/pdf/.gitkeep
 !data/csv/.gitkeep
+!data/documents/.gitkeep
 
 # Generated outputs (not committed, but folder structure is tracked)
 outputs/*
@@ -241,3 +243,6 @@ outputs/reports/*
 outputs/schemas/*
 !outputs/**/.gitkeep
 
+
+# Reproducible synthetic acceptance outputs (generator source is tracked)
+/data/synthetic/

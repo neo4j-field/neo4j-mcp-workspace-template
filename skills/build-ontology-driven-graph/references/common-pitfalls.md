@@ -22,7 +22,7 @@ If they keep trying to upload, gently repeat. Don't give up and try to work arou
 2. If most documents succeeded, ask the user if they want to continue with what's there or retry the failures.
 3. If everything failed, check the most likely causes:
    - PDF is encrypted/password-protected
-   - PDF is image-only (no text layer) — would need a different parse mode (`docling` or `vlm_blocks`), but for v1 the skill assumes pymupdf works
+   - PDF is image-only (no text layer) — would need a different parse mode (`docling`), but for v1 the skill assumes pymupdf works
    - File path was wrong / files moved / permissions
 4. Tell the user what you found and what to try.
 

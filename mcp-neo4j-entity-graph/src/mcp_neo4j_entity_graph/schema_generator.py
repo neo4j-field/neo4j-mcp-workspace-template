@@ -20,6 +20,7 @@ import textwrap
 from typing import Any, Optional
 
 from .models import ExtractionSchema
+from .schema_validation import validate_extraction_schema, safe_name, unique
 from .normalizer_templates import (
     NormalizerConfig,
     gen_alias_map_constant,
@@ -90,6 +91,12 @@ def generate_extraction_models_code(
     Returns:
         Python source code as a string, ready to be written to a .py file
     """
+    generated_classes = [e.label + "Entity" for e in schema.entity_types] + [_pascal_from_screaming_snake(r.type) + "Rel" for r in schema.relationship_types]
+    generated_fields = [_pluralize(_to_snake_case(e.label)) for e in schema.entity_types] + [_to_snake_case(r.type) for r in schema.relationship_types]
+    unique(generated_classes, "generated model classes")
+    unique(generated_fields, "generated output fields")
+    for name in generated_fields:
+        safe_name(name, "generated output", field=True)
     key_normalization = key_normalization or {}
     labels = {e.label for e in schema.entity_types}
     if set(key_normalization) - labels:
@@ -98,8 +105,18 @@ def generate_extraction_models_code(
         raise ValueError("Key normalization must be strip or strip_lower")
     if normalizers and key_normalization:
         raise ValueError("Use ontology normalizers or key_normalization, not both")
+    validate_extraction_schema(schema)
     if normalizers is None:
         normalizers = {}
+    property_types = {f"{e.label}.{e.key_property}": "STRING" for e in schema.entity_types}
+    property_types.update({f"{owner}.{p.name}": p.type for owner, props in
+                           [(e.label, e.properties) for e in schema.entity_types] +
+                           [(r.type, r.properties) for r in schema.relationship_types] for p in props})
+    for name, chain in normalizers.items():
+        for config in chain:
+            if config.tag == "enum_validate" and config.enum_values:
+                if property_types.get(name) != "STRING" or any(type(v) is not str for v in config.enum_values):
+                    raise ValueError(f"{name}: enum_validate requires a STRING property and string values")
 
     lines: list[str] = []
 
@@ -189,7 +206,7 @@ def generate_extraction_models_code(
         class_name = f"{et.label}Entity"
         lines.append(f"class {class_name}(BaseModel):")
         if et.description:
-            lines.append(f'    """{et.description}"""')
+            lines.append("    " + repr(et.description))
         lines.append("")
         lines.append(f'    _node_label: ClassVar[str] = "{et.label}"')
         lines.append(f'    _key_property: ClassVar[str] = "{et.key_property}"')
@@ -236,13 +253,15 @@ def generate_extraction_models_code(
             prop_chain = normalizers.get(f"{et.label}.{prop.name}") if normalizers else None
             enum_cfg = next((c for c in prop_chain if c.tag == "enum_validate" and c.enum_values), None) if prop_chain else None
             if enum_cfg:
-                literal_vals = ", ".join(f'"{v}"' for v in sorted(enum_cfg.enum_values))
-                field_type = f"Optional[Literal[{literal_vals}]]"
+                literal_vals = ", ".join(repr(v) for v in sorted(enum_cfg.enum_values))
+                base_type = f"Literal[{literal_vals}]"
             else:
-                field_type = f"Optional[{py_type}]"
+                base_type = py_type
+            field_type = base_type if prop.required else f"Optional[{base_type}]"
+            default = "..." if prop.required else "None"
             lines.append(
                 f"    {prop.name}: {field_type} = "
-                f'Field(default=None, description="{desc}")'
+                f'Field(default={default}, description="{desc}")'
             )
 
         # Validators
@@ -322,6 +341,9 @@ def generate_extraction_models_code(
             source_field = f"source_{source_field}"
             target_field = f"target_{target_field}"
 
+        if {p.name for p in rel.properties} & {source_field, target_field}:
+            raise ValueError(f"{rel.type}: relationship property collides with generated endpoint field")
+
         source_desc = entity_key_descs.get(
             rel.source_entity, f"Key of {rel.source_entity}"
         )
@@ -331,13 +353,15 @@ def generate_extraction_models_code(
 
         lines.append(f"class {class_name}Rel(BaseModel):")
         if rel.description:
-            lines.append(f'    """{rel.description}"""')
+            lines.append("    " + repr(rel.description))
         lines.append("")
         lines.append(f'    _relationship_type: ClassVar[str] = "{rel.type}"')
         lines.append(f'    _start_node_label: ClassVar[str] = "{rel.source_entity}"')
         lines.append(f'    _end_node_label: ClassVar[str] = "{rel.target_entity}"')
         lines.append(f'    _start_key_property: ClassVar[str] = "{source_key}"')
         lines.append(f'    _end_key_property: ClassVar[str] = "{target_key}"')
+        lines.append(f'    _start_field: ClassVar[str] = "{source_field}"')
+        lines.append(f'    _end_field: ClassVar[str] = "{target_field}"')
         lines.append("")
 
         # Source and target key fields
@@ -369,13 +393,15 @@ def generate_extraction_models_code(
             prop_chain = normalizers.get(f"{rel.type}.{prop.name}") if normalizers else None
             enum_cfg = next((c for c in prop_chain if c.tag == "enum_validate" and c.enum_values), None) if prop_chain else None
             if enum_cfg:
-                literal_vals = ", ".join(f'"{v}"' for v in sorted(enum_cfg.enum_values))
-                field_type = f"Optional[Literal[{literal_vals}]]"
+                literal_vals = ", ".join(repr(v) for v in sorted(enum_cfg.enum_values))
+                base_type = f"Literal[{literal_vals}]"
             else:
-                field_type = f"Optional[{py_type}]"
+                base_type = py_type
+            field_type = base_type if prop.required else f"Optional[{base_type}]"
+            default = "..." if prop.required else "None"
             lines.append(
                 f"    {prop.name}: {field_type} = "
-                f'Field(default=None, description="{desc}")'
+                f'Field(default={default}, description="{desc}")'
             )
 
         if not normalizers:
@@ -475,7 +501,7 @@ def generate_extraction_schema_json(schema: ExtractionSchema) -> dict[str, Any]:
 
 def _escape(s: str) -> str:
     """Escape a string for use inside double-quoted Python strings."""
-    return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+    return json.dumps(s, ensure_ascii=False)[1:-1]
 
 
 def _pascal_from_screaming_snake(name: str) -> str:

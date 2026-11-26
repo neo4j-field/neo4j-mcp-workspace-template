@@ -10,7 +10,6 @@ Call `create_lexical_graph` with `parse_mode="docling"`.
 
 Key parameters:
 - `extract_sections=True` (default) — extracts section headings. Keep enabled.
-- `extract_toc=True` (default) — extracts table of contents. Keep enabled.
 - `skip_furniture=True` (default) — skips headers/footers.
 - `max_parallel=0` (default) — auto-detects optimal worker count from available RAM and CPU. Set explicitly (e.g. `max_parallel=2`) to cap resource usage on memory-constrained machines.
 
@@ -44,16 +43,28 @@ Call `verify_lexical_graph` on one document. Verify that sections and reading or
 
 ---
 
-## Step 5 — Assign section hierarchy (optional)
+## Step 5 — Review native section hierarchy (optional)
 
-Call `assign_section_hierarchy` for documents with nested sections (legal texts, regulatory docs, long-form reports). This:
+Docling infers heading levels during parsing. Structured chunking includes the full
+heading chain without a separate hierarchy LLM call. Spot-check nested sections;
+no additional hierarchy step is needed when the result is correct.
+
+Bold body labels and printed contents may also be classified as headings. A
+successful parse does not guarantee an exact author-intended hierarchy. Review
+`get_document_outline` when section boundaries matter; do not silently discard
+headings simply because they are absent from the PDF outline.
+
+Use `assign_section_hierarchy` only as an explicit correction when the native
+headings are wrong. This costs an LLM call and:
 - Uses LLM to infer correct heading levels from section titles.
 - Rebuilds `HAS_SUBSECTION` relationships.
 - Updates `sectionContext` on active Chunk nodes (e.g. `"Chapter 1 > Section 1.1 > Sub 1.1.1"`).
 
-Call without `document_id` to process all active documents in parallel (recommended for batches):
+This corrects levels and parents; it does not remove false-positive headings.
+
+Target the document that needs correction, then embed its corrected chunks:
 ```
-assign_section_hierarchy()
+assign_section_hierarchy(document_id="your-exact-document-version-id")
 ```
 
 Skip for flat documents with no section hierarchy.
