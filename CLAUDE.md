@@ -203,3 +203,9 @@ One skill covers all use cases:
 - **Do not** add MCP servers to the session at runtime — MCP must be configured before the IDE starts
 - **Do not** use relative paths in Cypher `LOAD CSV` or ingest tool calls — always use absolute paths
 - **Do not** commit `.env`, `.cursor/mcp.json`, or `.mcp.json` — they are gitignored for security
+
+---
+
+## 9. Pull requests
+
+Keep changes small and follow [CONTRIBUTING.md](CONTRIBUTING.md). Run `./scripts/verify-pr.sh` before opening a PR; CI runs the same check. Never commit secrets, generated configs, customer data, local outputs, or build artifacts. JM approves and merges; no auto-merge.
