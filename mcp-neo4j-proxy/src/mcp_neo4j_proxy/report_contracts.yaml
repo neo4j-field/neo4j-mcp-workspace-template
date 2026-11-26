@@ -1,0 +1,54 @@
+version: 1
+
+contracts:
+  chatbot_report:
+    required_sections:
+      - Source Data
+      - Use Case
+      - Graph Data Model
+      - Target Questions and Answers
+      - Gaps and Limitations
+      - Recommended Next Steps
+    conditional_sections:
+      - section: Extraction Quality
+        when: pdf_data_present
+    repeated_record:
+      source: confirmed_target_questions
+      section: Target Questions and Answers
+      heading_prefix: Q
+      fields:
+        - question
+        - method
+        - query
+        - answer
+        - quality
+        - improvement
+    evidence:
+      - source_files_and_counts
+      - graph_model
+      - executed_query_per_question
+
+  analytical_report:
+    required_sections:
+      - Source Data
+      - Use Cases
+      - Graph Data Model
+      - Cypher Queries
+      - Gaps and Limitations
+      - Recommended Next Steps
+    conditional_sections:
+      - section: Extraction Quality
+        when: pdf_data_present
+    repeated_record:
+      source: confirmed_use_cases
+      section: Cypher Queries
+      heading_prefix: Use case
+      fields:
+        - use_case
+        - cypher
+        - results
+        - coverage
+    evidence:
+      - source_files_and_counts
+      - graph_model
+      - executed_query_per_use_case

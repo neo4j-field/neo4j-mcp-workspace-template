@@ -23,4 +23,16 @@ for project in "${PROJECTS[@]}"; do
     fi
 done
 
+printf '==> Test root ingest compiler and null handling\n'
+uv run --project "$ROOT_DIR/mcp-neo4j-ingest" --frozen python -m unittest \
+    tests.unit.test_ingest_query_compiler \
+    tests.unit.test_ingest_csv_nulls -v
+
+printf '==> Test workflow report validation\n'
+uv run --project "$ROOT_DIR/mcp-neo4j-proxy" --frozen python -m unittest \
+    tests.report_validation.test_report_validator -v
+
+printf '==> Test safe setup dotenv handling\n'
+python3 -m unittest tests.unit.test_setup_env -v
+
 printf 'Verification completed; explicit skips above are not test passes.\n'

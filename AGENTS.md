@@ -73,7 +73,7 @@ Five MCP servers are configured for this workspace:
 
 ### `neo4j-ingest`
 - **Purpose:** Load structured CSV data into Neo4j
-- **Key tools:** `ingest_csv_into_neo4j`
+- **Key tools:** `compile_node_ingest_query`, `compile_relationship_ingest_query`, `ingest_csv_into_neo4j`
 - **Required env:** reads from `.env` via python-dotenv
 
 ### `neo4j-lexical-graph`

@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "Python 3 is required to parse .env safely; install python3 and retry." >&2
+  exit 1
+fi
 
 # ─────────────────────────────────────────────────────────────
 # Colors
@@ -87,33 +93,22 @@ else
   read -r -p "  EXTRACTION_MODEL [gpt-5.4-mini]: " input_extract
   EXTRACTION_MODEL="${input_extract:-gpt-5.4-mini}"
 
-  # Write .env
-  cat > "$ENV_FILE" << EOF
-# Neo4j connection
-NEO4J_URI=${NEO4J_URI}
-NEO4J_USERNAME=${NEO4J_USERNAME}
-NEO4J_PASSWORD=${NEO4J_PASSWORD}
-NEO4J_DATABASE=${NEO4J_DATABASE}
-
-# OpenAI API key (needed for lexical-graph and entity-graph)
-OPENAI_API_KEY=${OPENAI_API_KEY}
-
-# Model names
-EMBEDDING_MODEL=${EMBEDDING_MODEL}
-EXTRACTION_MODEL=${EXTRACTION_MODEL}
-EOF
+  # Serialize credentials as literal dotenv values, never shell source.
+  export NEO4J_URI NEO4J_USERNAME NEO4J_PASSWORD NEO4J_DATABASE
+  export OPENAI_API_KEY EMBEDDING_MODEL EXTRACTION_MODEL
+  python3 "$WORKSPACE_DIR/scripts/setup-env.py" create "$ENV_FILE"
 
   success ".env created at $ENV_FILE"
 fi
 
 # ─────────────────────────────────────────────────────────────
-# 3. Source .env
+# 3. Load .env as data (no shell evaluation or variable interpolation)
 # ─────────────────────────────────────────────────────────────
-# Export every non-comment, non-blank line
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
+chmod 600 "$ENV_FILE"
+python3 "$WORKSPACE_DIR/scripts/setup-env.py" check "$ENV_FILE"
+while IFS= read -r -d '' setup_key && IFS= read -r -d '' setup_value; do
+  export "$setup_key=$setup_value"
+done < <(python3 "$WORKSPACE_DIR/scripts/setup-env.py" export "$ENV_FILE")
 
 NEO4J_URI="${NEO4J_URI:-neo4j://localhost:7687}"
 NEO4J_USERNAME="${NEO4J_USERNAME:-neo4j}"

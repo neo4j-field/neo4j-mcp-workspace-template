@@ -107,7 +107,7 @@ Five MCP servers are configured for this workspace:
 
 ### `neo4j-ingest`
 - **Purpose:** Load structured CSV data into Neo4j using parameterized Cypher
-- **Key tools:** `ingest_csv_into_neo4j`
+- **Key tools:** `compile_node_ingest_query`, `compile_relationship_ingest_query`, `ingest_csv_into_neo4j`
 - **Required env:** none in mcp.json — reads from `.env` via python-dotenv
 - **Source:** local `mcp-neo4j-ingest/` (requires `uv sync`)
 
