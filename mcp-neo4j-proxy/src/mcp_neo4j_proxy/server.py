@@ -5,7 +5,30 @@ from fastmcp import FastMCP
 from fastmcp.client.transports import StdioTransport
 from fastmcp.server import create_proxy
 
+from .report_validator import validate_report
+
 app = FastMCP("neo4j-mcp-workspace")
+
+
+@app.tool
+def validate_workflow_report(
+    report_markdown: str,
+    report_type: str,
+    expected_records: int,
+    pdf_data_present: bool = False,
+) -> dict:
+    """Validate a completed graph-development report before finalization.
+
+    report_type must be ``chatbot_report`` or ``analytical_report`` for the
+    current build workflow. The expected record count is the number of confirmed
+    target questions or analytical use cases.
+    """
+    return validate_report(
+        report_markdown=report_markdown,
+        report_type=report_type,
+        expected_records=expected_records,
+        pdf_data_present=pdf_data_present,
+    ).to_dict()
 
 
 # Parse EXTRA_ENV (KEY=VALUE pairs) and inject into the process environment

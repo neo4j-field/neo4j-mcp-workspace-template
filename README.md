@@ -25,7 +25,7 @@ Then open your AI coding tool:
 `setup.sh` will:
 
 1. Prompt for your Neo4j credentials and OpenAI API key
-2. Write `.env` with your configuration
+2. Write `.env` as literal data with owner-only permissions (no shell evaluation)
 3. Install dependencies for the local MCP servers
 4. Generate MCP config files for all 7 tools:
    - `.mcp.json` — Claude Code
@@ -87,6 +87,7 @@ The MCP servers run on your local machine and access your local filesystem. When
 ## Requirements
 
 - **[uv](https://docs.astral.sh/uv/)** — required to run all MCP servers (provides `uvx`)
+- **Python 3** — used by `setup.sh` to parse `.env` as literal data and create it with owner-only permissions
 - **Neo4j 2025.01+** — required for native `VECTOR` type used by lexical-graph
   - [Neo4j Desktop](https://neo4j.com/download/) or [AuraDB](https://neo4j.com/cloud/platform/aura-graph-database/)
 - **LLM provider** — for embedding generation and entity extraction (see [LLM Configuration](#llm-configuration) below)
@@ -296,6 +297,10 @@ Full provider list: [docs.litellm.ai/docs/providers](https://docs.litellm.ai/doc
 ```bash
 chmod +x setup.sh && ./setup.sh
 ```
+
+`.env` is parsed as data, not evaluated as shell code, and is created with
+owner-only permissions. Values containing spaces, quotes, `$`, or backticks are
+kept literal.
 
 The script is idempotent. Re-run it any time to:
 

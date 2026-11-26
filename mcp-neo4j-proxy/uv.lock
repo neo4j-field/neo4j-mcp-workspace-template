@@ -632,10 +632,14 @@ version = "0.2.1"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
+    { name = "pyyaml" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "fastmcp", specifier = ">=2.13.1" }]
+requires-dist = [
+    { name = "fastmcp", specifier = ">=2.13.1" },
+    { name = "pyyaml", specifier = ">=6.0,<7.0" },
+]
 
 [[package]]
 name = "mdurl"
